@@ -86,15 +86,13 @@ def _vehicle_color(frame: np.ndarray, plate_bbox: tuple | None) -> tuple[str, st
         px1, py1, px2, py2 = plate_bbox
         pw = px2 - px1
         ph = py2 - py1
-        # Vehicle body: above plate, same horizontal span expanded ×3
         crop_x1 = max(0, px1 - pw * 2)
         crop_x2 = min(w, px2 + pw * 2)
         crop_y2 = max(0, py1 - 5)
-        crop_y1 = max(0, py1 - ph * 10)  # 10× plate height above plate
+        crop_y1 = max(0, py1 - ph * 10)
         if crop_y2 > crop_y1 and crop_x2 > crop_x1:
             crop = frame[int(crop_y1):int(crop_y2), int(crop_x1):int(crop_x2)]
             return extract_dominant_color_from_frame(crop)
-    # Fallback: center 50% of image (excludes sky at top, road at bottom)
     cy1 = h // 4
     cy2 = 3 * h // 4
     cx1 = w // 4
@@ -110,58 +108,43 @@ def _frame_score(frame: np.ndarray, plates: list) -> float:
     return cv2.Laplacian(gray, cv2.CV_64F).var() * 0.001
 
 
-def _process_event():
-    event_id = str(uuid.uuid4())
-    event_dir = os.path.join(EVENTS_DIR, event_id)
-    os.makedirs(event_dir, exist_ok=True)
+def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: str = None):
+    """Process an existing clip: transcode, extract frames, LPR, store in DB."""
+    if camera_name is None:
+        camera_name = CAMERA_NAME
 
-    url = _rtsp_url()
-    clip_path = os.path.join(event_dir, "clip.mp4")
     frames_pattern = os.path.join(event_dir, "frame_%04d.jpg")
 
-    log.info(f"Capturing {CAPTURE_DURATION}s at {CAPTURE_FPS}fps — event {event_id[:8]}")
-
-    # Step 1: capture clip
-    ret = subprocess.run([
-        "ffmpeg", "-y", "-rtsp_transport", "tcp",
-        "-i", url, "-t", str(CAPTURE_DURATION), "-c", "copy", clip_path,
-    ], capture_output=True, timeout=CAPTURE_DURATION + 10)
-
-    if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
-        log.error(f"ffmpeg capture failed: {ret.stderr[-200:].decode(errors='ignore')}")
-        shutil.rmtree(event_dir, ignore_errors=True)
-        return
-
-    # Step 2: extract all frames
-    subprocess.run([
-        "ffmpeg", "-y", "-i", clip_path,
-        "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
-    ], capture_output=True, timeout=30)
-
-    # Step 2b: transcode to H.264 baseline for browser compatibility
+    # Transcode to H.264 baseline for browser compatibility
     web_clip = os.path.join(event_dir, "clip_web.mp4")
     subprocess.run([
         "ffmpeg", "-y", "-i", clip_path,
         "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1",
         "-preset", "fast", "-crf", "28",
-        "-vf", "scale=-2:720",     # downsample to 720p — enough for review
-        "-an",                     # no audio needed for surveillance
-        "-movflags", "+faststart", # moov atom at front for streaming
+        "-vf", "scale=-2:720",
+        "-an",
+        "-movflags", "+faststart",
         web_clip,
-    ], capture_output=True, timeout=60)
+    ], capture_output=True, timeout=120)
     if os.path.exists(web_clip):
         os.replace(web_clip, clip_path)
     else:
         log.warning("Transcode failed, keeping raw clip")
+
+    # Extract frames
+    subprocess.run([
+        "ffmpeg", "-y", "-i", clip_path,
+        "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
+    ], capture_output=True, timeout=60)
 
     frame_files = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
     log.info(f"Extracted {len(frame_files)} frames")
 
     if not frame_files:
         shutil.rmtree(event_dir, ignore_errors=True)
-        return
+        return None
 
-    # Step 3: score ALL frames, rename sorted (best = frame_0001)
+    # Score ALL frames, rename sorted (best = frame_0001)
     scored: list[tuple[float, np.ndarray, str]] = []
     for path in frame_files:
         frame = cv2.imread(path)
@@ -173,7 +156,6 @@ def _process_event():
 
     scored.sort(key=lambda x: -x[0])
 
-    # Rename to sorted order (temp names to avoid collisions)
     for i, (_, _, old_path) in enumerate(scored):
         os.rename(old_path, old_path + ".tmp")
     for i, (_, _, old_path) in enumerate(scored):
@@ -182,28 +164,65 @@ def _process_event():
     best_frame = scored[0][1] if scored else None
     if best_frame is None:
         shutil.rmtree(event_dir, ignore_errors=True)
-        return
+        return None
 
-    # Step 4: run LPR on best frame
+    # LPR on best frame
     plate, conf, plate_bbox = ("", 0.0, None)
     if _analyzer:
         plate, conf, plate_bbox = _analyzer.read_plate(best_frame)
     log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
-    # Step 5: save thumbnail (best frame)
+    # Save thumbnail
     snapshot_file = f"{event_id}.jpg"
     snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
     cv2.imwrite(snapshot_path, best_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
-    # Color: crop vehicle body above plate (avoids sky/road)
     hex_color, color_name = _vehicle_color(best_frame, plate_bbox)
     insert_event(
-        event_id, CAMERA_NAME, int(time.time()),
+        event_id, camera_name, int(time.time()),
         f"snapshots/{snapshot_file}",
         f"events/{event_id}/clip.mp4",
         plate or None, hex_color, color_name,
     )
     log.info(f"Stored: {event_id[:8]} | plate={plate} | color={color_name} | frames={len(frame_files)}")
+    return event_id
+
+
+def _process_event():
+    event_id = str(uuid.uuid4())
+    event_dir = os.path.join(EVENTS_DIR, event_id)
+    os.makedirs(event_dir, exist_ok=True)
+
+    url = _rtsp_url()
+    clip_path = os.path.join(event_dir, "clip.mp4")
+
+    log.info(f"Capturing {CAPTURE_DURATION}s at {CAPTURE_FPS}fps — event {event_id[:8]}")
+
+    ret = subprocess.run([
+        "ffmpeg", "-y", "-rtsp_transport", "tcp",
+        "-i", url, "-t", str(CAPTURE_DURATION), "-c", "copy", clip_path,
+    ], capture_output=True, timeout=CAPTURE_DURATION + 10)
+
+    if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
+        log.error(f"ffmpeg capture failed: {ret.stderr[-200:].decode(errors='ignore')}")
+        shutil.rmtree(event_dir, ignore_errors=True)
+        return
+
+    _process_clip(event_id, event_dir, clip_path)
+
+
+def process_uploaded_clip(src_path: str) -> str:
+    """Create a new event from an uploaded MP4. Returns event_id."""
+    event_id = str(uuid.uuid4())
+    event_dir = os.path.join(EVENTS_DIR, event_id)
+    os.makedirs(event_dir, exist_ok=True)
+    clip_path = os.path.join(event_dir, "clip.mp4")
+    shutil.copy2(src_path, clip_path)
+    log.info(f"Processing uploaded clip — event {event_id[:8]}")
+    result = _process_clip(event_id, event_dir, clip_path, camera_name="upload")
+    if result is None:
+        raise RuntimeError("Processing failed: no frames extracted")
+    return event_id
 
 
 def run_watcher():

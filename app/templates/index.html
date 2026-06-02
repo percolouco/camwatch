@@ -16,6 +16,11 @@
     .btn:hover { background: #1d4ed8; }
     .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; }
     .btn-ghost:hover { background: #334155; color: #e2e8f0; }
+    .btn-upload { background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; cursor: pointer; }
+    .btn-upload:hover { background: #334155; color: #e2e8f0; }
+    #upload-panel { display:none; background:#1e293b; border:1px solid #334155; border-radius:10px; padding:16px; margin-bottom:16px; }
+    #upload-panel.open { display:block; }
+    #upload-progress { display:none; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -26,10 +31,29 @@
       <span class="font-bold text-lg">CamWatch</span>
       <span class="text-slate-500 text-sm hidden sm:inline">— Passages véhicules</span>
     </div>
-    <span class="text-slate-400 text-sm">{{ total }} passage{{ 's' if total != 1 else '' }}</span>
+    <div class="flex items-center gap-2">
+      <span class="text-slate-400 text-sm">{{ total }} passage{{ 's' if total != 1 else '' }}</span>
+      <button class="btn-upload" onclick="document.getElementById('upload-panel').classList.toggle('open')">⬆ Tester un clip</button>
+    </div>
   </header>
 
   <main class="max-w-5xl mx-auto px-3 py-4">
+
+    <!-- Upload panel -->
+    <div id="upload-panel">
+      <p class="text-slate-300 text-sm font-medium mb-3">Tester un clip .mp4 — il sera traité comme un vrai passage (LPR + couleur + frames)</p>
+      <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data"
+            onsubmit="startUpload(event)">
+        <div class="flex items-center gap-3 flex-wrap">
+          <input type="file" name="file" accept=".mp4,video/mp4" required
+                 class="text-sm text-slate-300 file:mr-3 file:py-1.5 file:px-4 file:rounded file:border-0 file:text-sm file:bg-slate-700 file:text-slate-200 hover:file:bg-slate-600 cursor-pointer">
+          <button type="submit" class="btn text-sm">Analyser</button>
+        </div>
+      </form>
+      <div id="upload-progress" class="mt-3 text-sm text-slate-400">
+        ⏳ Traitement en cours (extraction frames + LPR)… merci de patienter ~60s
+      </div>
+    </div>
 
     <!-- Filters -->
     <form method="get" class="flex flex-wrap gap-2 mb-5">
@@ -98,6 +122,13 @@
 
   </main>
 
-  <script>setTimeout(() => location.reload(), 60000);</script>
+  <script>
+    setTimeout(() => location.reload(), 60000);
+
+    function startUpload(e) {
+      document.getElementById('upload-form').querySelector('button[type=submit]').disabled = true;
+      document.getElementById('upload-progress').style.display = 'block';
+    }
+  </script>
 </body>
 </html>

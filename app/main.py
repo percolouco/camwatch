@@ -2,9 +2,11 @@ import os
 import glob
 import logging
 import threading
+import tempfile
+import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Query, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from datetime import datetime
@@ -132,6 +134,25 @@ async def api_events(
     for ev in events:
         ev["time_str"] = ts_to_str(ev["start_time"])
     return {"events": events, "total": total}
+
+
+@app.post("/upload")
+async def upload_clip(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Seuls les fichiers .mp4 sont acceptés")
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        loop = asyncio.get_event_loop()
+        event_id = await loop.run_in_executor(None, watcher.process_uploaded_clip, tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    return RedirectResponse(f"/event/{event_id}", status_code=303)
 
 
 @app.get("/health")
