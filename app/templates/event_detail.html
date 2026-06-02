@@ -45,13 +45,26 @@
       <div class="card p-4 space-y-4">
         <div>
           <label>Plaque</label>
-          <div class="mt-1">
+          <div class="mt-1 mb-2">
             {% if ev.plate %}
             <span class="plate text-xl font-bold px-4 py-2 rounded" style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">{{ ev.plate }}</span>
             {% else %}
-            <span class="text-slate-500 italic">Non lue</span>
+            <span class="text-slate-500 italic text-sm">Non lue automatiquement</span>
             {% endif %}
           </div>
+          {% if plate_crop %}
+          <div class="mb-2">
+            <label>Crop détecté</label>
+            <img src="/{{ plate_crop }}" class="mt-1 rounded border border-slate-600 w-full" style="image-rendering:pixelated;" title="Zoom plate crop">
+          </div>
+          {% endif %}
+          <form action="/event/{{ ev.id }}/plate" method="post" class="flex gap-2 mt-1">
+            <input type="text" name="plate" value="{{ ev.plate or '' }}"
+                   placeholder="Saisir plaque…"
+                   class="flex-1 text-sm font-mono uppercase"
+                   style="background:#0f172a;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:5px 8px;">
+            <button type="submit" class="text-xs px-3 py-1 rounded" style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">✓</button>
+          </form>
         </div>
 
         <div>

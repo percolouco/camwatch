@@ -107,6 +107,13 @@ def get_event(event_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def update_plate(event_id: str, plate: str):
+    conn = get_db()
+    conn.execute("UPDATE events SET plate = ? WHERE id = ?", (plate.strip().upper() or None, event_id))
+    conn.commit()
+    conn.close()
+
+
 def get_cameras():
     conn = get_db()
     rows = conn.execute("SELECT DISTINCT camera FROM events ORDER BY camera").fetchall()

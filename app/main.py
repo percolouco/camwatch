@@ -5,7 +5,7 @@ import threading
 import tempfile
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -103,12 +103,16 @@ async def event_detail(request: Request, event_id: str):
         size = os.path.getsize(clip_abs)
         clip_size = f"{size // 1024 // 1024}MB" if size > 1024 * 1024 else f"{size // 1024}KB"
 
+    plate_crop_abs = os.path.join(event_dir, "plate_crop.jpg")
+    plate_crop = f"events/{event_id}/plate_crop.jpg" if os.path.exists(plate_crop_abs) else None
+
     return templates.TemplateResponse("event_detail.html", {
         "request": request,
         "ev": ev,
         "frames": frames,
         "has_clip": has_clip,
         "clip_size": clip_size,
+        "plate_crop": plate_crop,
         "capture_duration": CAPTURE_DURATION,
         "capture_fps": CAPTURE_FPS,
         "capture_total": CAPTURE_DURATION * CAPTURE_FPS,
@@ -134,6 +138,15 @@ async def api_events(
     for ev in events:
         ev["time_str"] = ts_to_str(ev["start_time"])
     return {"events": events, "total": total}
+
+
+@app.post("/event/{event_id}/plate")
+async def update_plate(event_id: str, plate: str = Form("")):
+    ev = database.get_event(event_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+    database.update_plate(event_id, plate)
+    return RedirectResponse(f"/event/{event_id}", status_code=303)
 
 
 @app.post("/upload")

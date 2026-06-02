@@ -172,6 +172,20 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         plate, conf, plate_bbox = _analyzer.read_plate(best_frame)
     log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
+    # Save plate crop for manual review (even when OCR fails)
+    if plate_bbox:
+        px1, py1, px2, py2 = plate_bbox
+        fh, fw = best_frame.shape[:2]
+        pad = max(8, int((py2 - py1) * 0.5))
+        cx1, cy1 = max(0, px1 - pad), max(0, py1 - pad)
+        cx2, cy2 = min(fw, px2 + pad), min(fh, py2 + pad)
+        plate_crop = best_frame[cy1:cy2, cx1:cx2]
+        if plate_crop.size > 0:
+            # Save at 4× upscale for readability
+            ph, pw = plate_crop.shape[:2]
+            big = cv2.resize(plate_crop, (pw * 4, ph * 4), interpolation=cv2.INTER_CUBIC)
+            cv2.imwrite(os.path.join(event_dir, "plate_crop.jpg"), big, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
     # Save thumbnail
     snapshot_file = f"{event_id}.jpg"
     snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
