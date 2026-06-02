@@ -109,13 +109,19 @@ def _frame_score(frame: np.ndarray, plates: list) -> float:
 
 
 def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: str = None):
-    """Process an existing clip: transcode, extract frames, LPR, store in DB."""
+    """Process an existing clip: extract frames at full res, transcode for browser, LPR, store in DB."""
     if camera_name is None:
         camera_name = CAMERA_NAME
 
     frames_pattern = os.path.join(event_dir, "frame_%04d.jpg")
 
-    # Transcode to H.264 baseline for browser compatibility
+    # Extract frames at full original resolution BEFORE any transcode
+    subprocess.run([
+        "ffmpeg", "-y", "-i", clip_path,
+        "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
+    ], capture_output=True, timeout=60)
+
+    # Transcode to H.264 baseline 720p for browser (after frame extraction)
     web_clip = os.path.join(event_dir, "clip_web.mp4")
     subprocess.run([
         "ffmpeg", "-y", "-i", clip_path,
@@ -130,12 +136,6 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         os.replace(web_clip, clip_path)
     else:
         log.warning("Transcode failed, keeping raw clip")
-
-    # Extract frames
-    subprocess.run([
-        "ffmpeg", "-y", "-i", clip_path,
-        "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
-    ], capture_output=True, timeout=60)
 
     frame_files = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
     log.info(f"Extracted {len(frame_files)} frames")
