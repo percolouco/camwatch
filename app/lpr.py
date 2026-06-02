@@ -38,6 +38,18 @@ def _nms(boxes: list, iou_threshold: float = 0.3) -> list:
     return result
 
 
+def _order_points(pts: np.ndarray) -> np.ndarray:
+    """Order 4 points: top-left, top-right, bottom-right, bottom-left."""
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+
 class PlateAnalyzer:
     def __init__(self):
         self._yolo = None
@@ -75,7 +87,6 @@ class PlateAnalyzer:
             log.error(f"LPR model load error: {e}")
 
     def _yolo_on_tile(self, tile: np.ndarray, offset_x: int, offset_y: int) -> list[tuple]:
-        """Run YOLO on a single tile, return boxes in original frame coordinates."""
         th, tw = tile.shape[:2]
         inp = cv2.resize(tile, (256, 256))
         inp = cv2.cvtColor(inp, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
@@ -97,7 +108,6 @@ class PlateAnalyzer:
             bw, bh = x2 - x1, y2 - y1
             if bw < 8 or bh < 4:
                 continue
-            # Plates are always wider than tall — French plates ~4.7:1
             ratio = bw / bh
             if ratio < 2.0 or ratio > 6.5:
                 continue
@@ -118,7 +128,6 @@ class PlateAnalyzer:
         work = frame[y_start:y_end, :]
         wh = y_end - y_start
 
-        # 3×2 tiles with 20% overlap so plates near tile edges are caught
         cols, rows = 3, 2
         overlap = 0.2
         tw = int(w / (cols - overlap * (cols - 1)))
@@ -133,49 +142,107 @@ class PlateAnalyzer:
                 tx2 = min(w, tx1 + tw)
                 ty2 = min(wh, ty1 + th)
                 tile = work[ty1:ty2, tx1:tx2]
-                # offset_y accounts for the cropped top strip
                 all_boxes.extend(self._yolo_on_tile(tile, tx1, ty1 + y_start))
 
         return _nms(all_boxes, iou_threshold=0.3)
 
-    def _enhance_crop(self, crop: np.ndarray) -> np.ndarray:
-        """Upscale + CLAHE + sharpen a plate crop for better OCR."""
-        h, w = crop.shape[:2]
-        # Upscale so the plate is at least 80px tall
+    def _find_plate_quad(self, frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray | None:
+        """Find the 4 corners of the plate using minAreaRect on the white plate region."""
+        fh, fw = frame.shape[:2]
+        pw, ph = x2 - x1, y2 - y1
+
+        mx = int(pw * 0.6)
+        my = int(ph * 1.2)
+        rx1 = max(0, x1 - mx)
+        ry1 = max(0, y1 - my)
+        rx2 = min(fw, x2 + mx)
+        ry2 = min(fh, y2 + my)
+        region = frame[ry1:ry2, rx1:rx2]
+
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
+        kernel = np.ones((3, 3), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        # Use the largest bright contour (plate background)
+        cnt = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(cnt) < pw * ph * 0.3:
+            return None
+
+        rect = cv2.minAreaRect(cnt)
+        box = cv2.boxPoints(rect).astype(np.float32)
+        box[:, 0] += rx1
+        box[:, 1] += ry1
+
+        # Validate: the oriented rect should be plate-shaped
+        bw = rect[1][0]
+        bh = rect[1][1]
+        long_side = max(bw, bh)
+        short_side = min(bw, bh)
+        if short_side < 4 or long_side / short_side < 2.0:
+            return None
+
+        return box
+
+    def _perspective_correct(self, frame: np.ndarray, quad: np.ndarray) -> np.ndarray:
+        """Warp the detected plate quad to a frontal rectangle."""
+        pts = _order_points(quad)
+        # French plate: 520×110mm → 4.73:1
         target_h = 80
-        if h < target_h:
-            scale = target_h / h
-            crop = cv2.resize(crop, (max(10, int(w * scale)), target_h), interpolation=cv2.INTER_CUBIC)
-        # CLAHE contrast enhancement
+        target_w = int(target_h * 4.73)
+        dst = np.array([
+            [0, 0], [target_w - 1, 0],
+            [target_w - 1, target_h - 1], [0, target_h - 1],
+        ], dtype=np.float32)
+        M = cv2.getPerspectiveTransform(pts, dst)
+        return cv2.warpPerspective(frame, M, (target_w, target_h))
+
+    def _enhance_crop(self, crop: np.ndarray) -> np.ndarray:
+        """CLAHE contrast + sharpen for better OCR."""
         lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
         l = clahe.apply(l)
         crop = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-        # Mild sharpening
         kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
         return cv2.filter2D(crop, -1, kernel)
 
     def _ocr_tesseract(self, crop: np.ndarray) -> tuple[str, float]:
-        """Tesseract OCR tuned for license plates."""
         try:
             import pytesseract
+            # Skip EU blue strip (left ~11%) which confuses OCR
+            eu_skip = max(0, int(crop.shape[1] * 0.11))
+            crop = crop[:, eu_skip:]
+
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            # Try both single-word and single-line modes, take the longer result
-            cfg = "--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
-            text8 = pytesseract.image_to_string(gray, config=cfg).strip().replace(" ", "").upper()
-            cfg7 = "--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
-            text7 = pytesseract.image_to_string(gray, config=cfg7).strip().replace(" ", "").upper()
-            text = text8 if len(text8) >= len(text7) else text7
-            alnum = "".join(c for c in text if c.isalnum())
-            if len(alnum) >= 4:
-                return text, 0.6  # Tesseract doesn't give per-char conf easily; use fixed score
+            # Scale to at least 3× for reliable Tesseract recognition
+            if gray.shape[0] < 120:
+                scale = max(2, 120 // gray.shape[0])
+                gray = cv2.resize(gray, (gray.shape[1] * scale, gray.shape[0] * scale),
+                                  interpolation=cv2.INTER_CUBIC)
+
+            wl = "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+            results = []
+            for psm in [8, 7, 11]:
+                cfg = f"--psm {psm} --oem 3 {wl}"
+                t = pytesseract.image_to_string(gray, config=cfg).strip().upper()
+                t = "".join(c for c in t if c.isalnum() or c == "-")
+                alnum = "".join(c for c in t if c.isalnum())
+                if len(alnum) >= 4:
+                    results.append(t)
+            if results:
+                # Pick the result with the most alphanumeric characters
+                best = max(results, key=lambda r: len([c for c in r if c.isalnum()]))
+                return best, 0.6
         except Exception as e:
             log.debug(f"Tesseract error: {e}")
         return "", 0.0
 
     def _ocr_paddle(self, crop: np.ndarray) -> tuple[str, float]:
-        """PaddleOCR recognition fallback."""
         if self._rec is None or not self._keys or crop.size == 0:
             return "", 0.0
         h, w = crop.shape[:2]
@@ -203,35 +270,39 @@ class PlateAnalyzer:
         return text, avg_conf
 
     def _ocr_crop(self, crop: np.ndarray) -> tuple[str, float]:
-        """Run OCR on a plate crop. Tesseract first, PaddleOCR as fallback."""
         if crop.size == 0:
             return "", 0.0
         enhanced = self._enhance_crop(crop)
-        # Tesseract is better for Latin/French plates
         text, conf = self._ocr_tesseract(enhanced)
         if text:
             return text, conf
-        # Fallback to PaddleOCR
         return self._ocr_paddle(enhanced)
 
-    def read_plate(self, frame: np.ndarray) -> tuple[str, float, tuple | None]:
-        """Detect plate, read text. Returns (plate_text, confidence, bbox_or_None)."""
+    def read_plate(self, frame: np.ndarray) -> tuple[str, float, tuple | None, np.ndarray | None]:
+        """Detect + read plate.
+        Returns (plate_text, confidence, bbox_or_None, corrected_crop_or_None)."""
         plate_boxes = self.detect_plates(frame)
         if not plate_boxes:
-            return "", 0.0, None
+            return "", 0.0, None, None
 
         x1, y1, x2, y2, plate_conf = plate_boxes[0]
-        pad = 8
-        cx1 = max(0, int(x1) - pad)
-        cy1 = max(0, int(y1) - pad)
-        cx2 = min(frame.shape[1], int(x2) + pad)
-        cy2 = min(frame.shape[0], int(y2) + pad)
+        bbox = (int(x1), int(y1), int(x2), int(y2))
 
-        crop = frame[cy1:cy2, cx1:cx2]
-        text, ocr_conf = self._ocr_crop(crop)
+        # Try perspective correction first
+        quad = self._find_plate_quad(frame, int(x1), int(y1), int(x2), int(y2))
+        if quad is not None:
+            corrected = self._perspective_correct(frame, quad)
+            log.debug("Perspective correction applied")
+        else:
+            fh, fw = frame.shape[:2]
+            pad = 8
+            corrected = frame[max(0, int(y1) - pad):min(fh, int(y2) + pad),
+                              max(0, int(x1) - pad):min(fw, int(x2) + pad)]
+
+        text, ocr_conf = self._ocr_crop(corrected)
 
         alnum = "".join(c for c in text if c.isalnum())
         if len(alnum) < 4:
-            return "", 0.0, (int(x1), int(y1), int(x2), int(y2))
+            return "", 0.0, bbox, corrected
 
-        return text, (plate_conf + ocr_conf) / 2.0, (int(x1), int(y1), int(x2), int(y2))
+        return text, (plate_conf + ocr_conf) / 2.0, bbox, corrected

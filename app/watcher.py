@@ -167,12 +167,12 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         return None
 
     # LPR on best frame
-    plate, conf, plate_bbox = ("", 0.0, None)
+    plate, conf, plate_bbox, plate_corrected = ("", 0.0, None, None)
     if _analyzer:
-        plate, conf, plate_bbox = _analyzer.read_plate(best_frame)
+        plate, conf, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
     log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
-    # Save plate crop for manual review (even when OCR fails)
+    # Save raw plate crop (4× upscale) and the perspective-corrected OCR crop
     if plate_bbox:
         px1, py1, px2, py2 = plate_bbox
         fh, fw = best_frame.shape[:2]
@@ -181,10 +181,15 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         cx2, cy2 = min(fw, px2 + pad), min(fh, py2 + pad)
         plate_crop = best_frame[cy1:cy2, cx1:cx2]
         if plate_crop.size > 0:
-            # Save at 4× upscale for readability
             ph, pw = plate_crop.shape[:2]
             big = cv2.resize(plate_crop, (pw * 4, ph * 4), interpolation=cv2.INTER_CUBIC)
             cv2.imwrite(os.path.join(event_dir, "plate_crop.jpg"), big, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if plate_corrected is not None and plate_corrected.size > 0:
+        enhanced = _analyzer._enhance_crop(plate_corrected)
+        ch, cw = enhanced.shape[:2]
+        if cw < 300:  # upscale small crops for display
+            enhanced = cv2.resize(enhanced, (300, int(300 * ch / cw)), interpolation=cv2.INTER_CUBIC)
+        cv2.imwrite(os.path.join(event_dir, "plate_ocr.jpg"), enhanced, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
     # Save thumbnail
     snapshot_file = f"{event_id}.jpg"

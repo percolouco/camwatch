@@ -1,5 +1,6 @@
 import os
 import glob
+import shutil
 import logging
 import threading
 import tempfile
@@ -105,6 +106,8 @@ async def event_detail(request: Request, event_id: str):
 
     plate_crop_abs = os.path.join(event_dir, "plate_crop.jpg")
     plate_crop = f"events/{event_id}/plate_crop.jpg" if os.path.exists(plate_crop_abs) else None
+    plate_ocr_abs = os.path.join(event_dir, "plate_ocr.jpg")
+    plate_ocr = f"events/{event_id}/plate_ocr.jpg" if os.path.exists(plate_ocr_abs) else None
 
     return templates.TemplateResponse("event_detail.html", {
         "request": request,
@@ -113,6 +116,7 @@ async def event_detail(request: Request, event_id: str):
         "has_clip": has_clip,
         "clip_size": clip_size,
         "plate_crop": plate_crop,
+        "plate_ocr": plate_ocr,
         "capture_duration": CAPTURE_DURATION,
         "capture_fps": CAPTURE_FPS,
         "capture_total": CAPTURE_DURATION * CAPTURE_FPS,
@@ -138,6 +142,20 @@ async def api_events(
     for ev in events:
         ev["time_str"] = ts_to_str(ev["start_time"])
     return {"events": events, "total": total}
+
+
+@app.post("/event/{event_id}/delete")
+async def delete_event(event_id: str):
+    ev = database.get_event(event_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+    database.delete_event(event_id)
+    event_dir = os.path.join(EVENTS_DIR, event_id)
+    shutil.rmtree(event_dir, ignore_errors=True)
+    snapshot = os.path.join(SNAPSHOTS_DIR, f"{event_id}.jpg")
+    if os.path.exists(snapshot):
+        os.unlink(snapshot)
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/event/{event_id}/plate")

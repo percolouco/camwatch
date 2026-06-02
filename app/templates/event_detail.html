@@ -34,7 +34,11 @@
   <header class="sticky top-0 z-10 px-4 py-3 flex items-center gap-3" style="background:#0f172a;border-bottom:1px solid #1e293b;">
     <a href="/" class="btn-ghost">← Retour</a>
     <span class="text-xl">🚗</span>
-    <span class="font-bold">{{ ev.time_str }}</span>
+    <span class="font-bold flex-1">{{ ev.time_str }}</span>
+    <form action="/event/{{ ev.id }}/delete" method="post"
+          onsubmit="return confirm('Supprimer cet événement ?')">
+      <button type="submit" class="btn-ghost text-red-400 hover:text-red-300 hover:border-red-500">✕ Supprimer</button>
+    </form>
   </header>
 
   <main class="max-w-5xl mx-auto px-3 py-5 space-y-4">
@@ -54,8 +58,14 @@
           </div>
           {% if plate_crop %}
           <div class="mb-2">
-            <label>Crop détecté</label>
-            <img src="/{{ plate_crop }}" class="mt-1 rounded border border-slate-600 w-full" style="image-rendering:pixelated;" title="Zoom plate crop">
+            <label>Détection brute (4×)</label>
+            <img src="/{{ plate_crop }}" class="mt-1 rounded border border-slate-600 w-full" style="image-rendering:pixelated;">
+          </div>
+          {% endif %}
+          {% if plate_ocr %}
+          <div class="mb-2">
+            <label>Image utilisée pour l'OCR</label>
+            <img src="/{{ plate_ocr }}" class="mt-1 rounded border border-blue-700 w-full" style="image-rendering:pixelated;">
           </div>
           {% endif %}
           <form action="/event/{{ ev.id }}/plate" method="post" class="flex gap-2 mt-1">
