@@ -3,11 +3,22 @@ import numpy as np
 import colorsys
 
 
+def extract_dominant_color_from_frame(frame: np.ndarray, bbox: dict | None = None) -> tuple[str, str]:
+    """Returns (hex_color, color_name) from a BGR numpy frame."""
+    if frame is None:
+        return "#808080", "Inconnu"
+    return _dominant_color(frame, bbox)
+
+
 def extract_dominant_color(image_path: str, bbox: dict | None = None) -> tuple[str, str]:
-    """Returns (hex_color, color_name) from image, optionally cropped to bbox."""
+    """Returns (hex_color, color_name) from image path, optionally cropped to bbox."""
     img = cv2.imread(image_path)
     if img is None:
         return "#808080", "Inconnu"
+    return _dominant_color(img, bbox)
+
+
+def _dominant_color(img: np.ndarray, bbox: dict | None = None) -> tuple[str, str]:
 
     if bbox:
         h, w = img.shape[:2]

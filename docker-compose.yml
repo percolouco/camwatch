@@ -5,11 +5,18 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/data
+      - ./models:/models:ro
     environment:
-      - FRIGATE_URL=http://frigate:5000
+      - CAMERA_URL=http://192.168.1.44
+      - CAMERA_USER=admin
+      - CAMERA_PASS=Wxcvbn99--$$$$
+      - CAMERA_NAME=portail
+      - MODEL_CACHE=/models
       - DB_PATH=/data/camwatch.db
       - SNAPSHOTS_DIR=/data/snapshots
-      - POLL_INTERVAL=30
+      - POLL_INTERVAL=2
+      - CAPTURE_DURATION=20
+      - COOLDOWN=60
     labels:
       - traefik.enable=true
       - traefik.http.routers.camwatch.rule=Host(`camwatch.nas.percolouco.com`)
