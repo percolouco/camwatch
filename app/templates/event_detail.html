@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CamWatch — Passage {{ ev.time_str }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; }
+    .plate { font-family: monospace; letter-spacing: 0.15em; }
+    .btn { background: #2563eb; color: #fff; border-radius: 6px; padding: 7px 16px; font-size: 0.85rem; cursor: pointer; text-decoration: none; display: inline-block; }
+    .btn:hover { background: #1d4ed8; }
+    .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; }
+    .btn-ghost:hover { background: #334155; color: #e2e8f0; }
+    .frame-thumb { cursor: pointer; transition: transform 0.1s; }
+    .frame-thumb:hover { transform: scale(1.03); border-color: #3b82f6 !important; }
+    .frame-thumb.active { border-color: #3b82f6 !important; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-10 px-4 py-3 flex items-center justify-between" style="background:#0f172a;border-bottom:1px solid #1e293b;">
+    <div class="flex items-center gap-3">
+      <a href="/" class="btn btn-ghost text-sm px-3 py-1.5">← Retour</a>
+      <span class="text-xl">🚗</span>
+      <span class="font-bold">Passage — {{ ev.time_str }}</span>
+    </div>
+    <span class="text-slate-500 text-sm hidden sm:inline">{{ ev.camera }}</span>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-3 py-5 space-y-5">
+
+    <!-- Top row: info + main image -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+      <!-- Info card -->
+      <div class="card rounded-xl p-4 space-y-3">
+        <h2 class="text-slate-400 text-xs uppercase font-semibold tracking-wide">Informations</h2>
+
+        <div>
+          <div class="text-xs text-slate-500 mb-0.5">Date / Heure</div>
+          <div class="font-medium">{{ ev.time_str }}</div>
+        </div>
+
+        <div>
+          <div class="text-xs text-slate-500 mb-0.5">Caméra</div>
+          <div class="font-medium">{{ ev.camera }}</div>
+        </div>
+
+        <div>
+          <div class="text-xs text-slate-500 mb-1">Plaque détectée</div>
+          {% if ev.plate %}
+          <span class="plate text-lg font-bold px-4 py-1.5 rounded"
+                style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">
+            {{ ev.plate }}
+          </span>
+          {% else %}
+          <span class="text-slate-500 italic text-sm">Non lue</span>
+          {% endif %}
+        </div>
+
+        <div>
+          <div class="text-xs text-slate-500 mb-1">Couleur véhicule</div>
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 rounded-full border border-slate-600"
+                 style="background:{{ ev.color_hex or '#808080' }};"></div>
+            <span class="font-medium">{{ ev.color_name or '—' }}</span>
+            <span class="text-slate-600 text-xs">{{ ev.color_hex or '' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main image viewer -->
+      <div class="md:col-span-2 card rounded-xl overflow-hidden">
+        <div class="relative bg-black" style="aspect-ratio:16/9;">
+          <img id="main-img"
+               src="{% if ev.snapshot_path %}/{{ ev.snapshot_path }}{% endif %}"
+               alt="Meilleure frame"
+               class="w-full h-full object-contain">
+        </div>
+        <div class="px-3 py-2 text-xs text-slate-500 text-center" id="img-label">Meilleure frame (score LPR)</div>
+      </div>
+    </div>
+
+    <!-- Video clip -->
+    {% if has_clip %}
+    <div class="card rounded-xl p-4">
+      <h2 class="text-slate-400 text-xs uppercase font-semibold tracking-wide mb-3">Clip vidéo ({{ ev.clip_path.split('/')[-1] }})</h2>
+      <video controls class="w-full rounded-lg" style="max-height:400px;background:#000;"
+             preload="metadata">
+        <source src="/{{ ev.clip_path }}" type="video/mp4">
+        Votre navigateur ne supporte pas la vidéo HTML5.
+      </video>
+    </div>
+    {% endif %}
+
+    <!-- Frames gallery -->
+    {% if frames %}
+    <div class="card rounded-xl p-4">
+      <h2 class="text-slate-400 text-xs uppercase font-semibold tracking-wide mb-3">
+        Frames extraites ({{ frames|length }} meilleures sur {{ (15 * 5)|int }} capturées)
+      </h2>
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+        {% for frame_path in frames %}
+        <div class="frame-thumb rounded overflow-hidden border border-slate-700 {% if loop.first %}active{% endif %}"
+             onclick="selectFrame(this, '/{{ frame_path }}', 'Frame {{ loop.index }} / {{ frames|length }}')">
+          <img src="/{{ frame_path }}" alt="Frame {{ loop.index }}"
+               class="w-full object-cover" style="aspect-ratio:16/9;">
+          <div class="text-center text-xs text-slate-500 py-0.5">
+            #{{ loop.index }}{% if loop.first %} ★{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </main>
+
+  <script>
+    function selectFrame(el, src, label) {
+      document.getElementById('main-img').src = src;
+      document.getElementById('img-label').textContent = label;
+      document.querySelectorAll('.frame-thumb').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+    }
+  </script>
+</body>
+</html>

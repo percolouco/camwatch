@@ -16,12 +16,18 @@ def init_db():
             camera TEXT,
             start_time INTEGER,
             snapshot_path TEXT,
+            clip_path TEXT,
             plate TEXT,
             color_hex TEXT,
             color_name TEXT,
             processed_at INTEGER
         )
     """)
+    # Migrate existing DBs that lack clip_path
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN clip_path TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -31,14 +37,14 @@ def event_exists(event_id: str) -> bool:
     conn.close()
     return row is not None
 
-def insert_event(event_id, camera, start_time, snapshot_path, plate, color_hex, color_name):
+def insert_event(event_id, camera, start_time, snapshot_path, clip_path, plate, color_hex, color_name):
     import time
     conn = get_db()
     conn.execute("""
         INSERT OR IGNORE INTO events
-        (id, camera, start_time, snapshot_path, plate, color_hex, color_name, processed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (event_id, camera, start_time, snapshot_path, plate, color_hex, color_name, int(time.time())))
+        (id, camera, start_time, snapshot_path, clip_path, plate, color_hex, color_name, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (event_id, camera, start_time, snapshot_path, clip_path, plate, color_hex, color_name, int(time.time())))
     conn.commit()
     conn.close()
 
@@ -93,6 +99,13 @@ def count_events(plate_filter=None, camera_filter=None, date_filter=None):
     count = conn.execute(query, params).fetchone()[0]
     conn.close()
     return count
+
+def get_event(event_id: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 
 def get_cameras():
     conn = get_db()

@@ -1,9 +1,9 @@
 import os
 import time
 import uuid
+import shutil
 import logging
 import subprocess
-import tempfile
 import glob
 import requests
 import cv2
@@ -22,9 +22,11 @@ CAMERA_PASS = os.environ.get("CAMERA_PASS", "")
 CAMERA_RTSP = os.environ.get("CAMERA_RTSP", "")
 CAMERA_NAME = os.environ.get("CAMERA_NAME", "portail")
 SNAPSHOTS_DIR = os.environ.get("SNAPSHOTS_DIR", "/data/snapshots")
+EVENTS_DIR = os.environ.get("EVENTS_DIR", "/data/events")
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2"))
 CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
 CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
+TOP_FRAMES = int(os.environ.get("TOP_FRAMES", "10"))
 COOLDOWN = int(os.environ.get("COOLDOWN", "60"))
 
 _token: str | None = None
@@ -54,7 +56,6 @@ def _login() -> str | None:
         if data[0]["code"] == 0:
             _token = data[0]["value"]["Token"]["name"]
             _token_time = time.time()
-            log.debug("Camera login OK")
             return _token
     except Exception as e:
         log.warning(f"Login error: {e}")
@@ -80,7 +81,6 @@ def _get_ai_state() -> dict | None:
 
 
 def _frame_score(frame: np.ndarray, plates: list) -> float:
-    """Score a frame: prefer large, high-confidence plates. Fallback to sharpness."""
     if plates:
         x1, y1, x2, y2, conf = plates[0]
         return (x2 - x1) * (y2 - y1) * conf
@@ -88,89 +88,94 @@ def _frame_score(frame: np.ndarray, plates: list) -> float:
     return cv2.Laplacian(gray, cv2.CV_64F).var() * 0.001
 
 
-def _capture_best_frame() -> np.ndarray | None:
-    url = _rtsp_url()
-    log.info(f"Capturing {CAPTURE_DURATION}s at {CAPTURE_FPS}fps via ffmpeg...")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        clip_path = os.path.join(tmpdir, "clip.mp4")
-        frames_pattern = os.path.join(tmpdir, "frame_%04d.jpg")
-
-        # Step 1: capture clip with ffmpeg (TCP for reliability)
-        ret = subprocess.run([
-            "ffmpeg", "-y",
-            "-rtsp_transport", "tcp",
-            "-i", url,
-            "-t", str(CAPTURE_DURATION),
-            "-c", "copy",
-            clip_path,
-        ], capture_output=True, timeout=CAPTURE_DURATION + 10)
-
-        if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
-            log.error(f"ffmpeg capture failed: {ret.stderr[-200:].decode(errors='ignore')}")
-            return None
-
-        # Step 2: extract frames at CAPTURE_FPS
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-i", clip_path,
-            "-vf", f"fps={CAPTURE_FPS}",
-            "-q:v", "2",
-            frames_pattern,
-        ], capture_output=True, timeout=30)
-
-        frame_files = sorted(glob.glob(os.path.join(tmpdir, "frame_*.jpg")))
-        log.info(f"Extracted {len(frame_files)} frames")
-
-        if not frame_files:
-            return None
-
-        # Step 3: score each frame, keep the best
-        best_frame: np.ndarray | None = None
-        best_score = -1.0
-
-        for path in frame_files:
-            frame = cv2.imread(path)
-            if frame is None:
-                continue
-            plates = _analyzer.detect_plates(frame) if _analyzer else []
-            score = _frame_score(frame, plates)
-            if score > best_score:
-                best_score = score
-                best_frame = frame.copy()
-
-        log.info(f"Best frame score: {best_score:.2f}")
-        return best_frame
-
-
 def _process_event():
-    frame = _capture_best_frame()
-    if frame is None:
-        log.warning("No frame captured")
+    event_id = str(uuid.uuid4())
+    event_dir = os.path.join(EVENTS_DIR, event_id)
+    os.makedirs(event_dir, exist_ok=True)
+
+    url = _rtsp_url()
+    clip_path = os.path.join(event_dir, "clip.mp4")
+    frames_pattern = os.path.join(event_dir, "frame_%04d.jpg")
+
+    log.info(f"Capturing {CAPTURE_DURATION}s at {CAPTURE_FPS}fps — event {event_id[:8]}")
+
+    # Step 1: capture clip
+    ret = subprocess.run([
+        "ffmpeg", "-y", "-rtsp_transport", "tcp",
+        "-i", url, "-t", str(CAPTURE_DURATION), "-c", "copy", clip_path,
+    ], capture_output=True, timeout=CAPTURE_DURATION + 10)
+
+    if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
+        log.error(f"ffmpeg capture failed: {ret.stderr[-200:].decode(errors='ignore')}")
+        shutil.rmtree(event_dir, ignore_errors=True)
         return
 
-    event_id = str(uuid.uuid4())
-    snapshot_file = f"{event_id}.jpg"
-    snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
-    cv2.imwrite(snapshot_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    # Step 2: extract frames
+    subprocess.run([
+        "ffmpeg", "-y", "-i", clip_path,
+        "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
+    ], capture_output=True, timeout=30)
 
-    plate, conf = "", 0.0
+    frame_files = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
+    log.info(f"Extracted {len(frame_files)} frames")
+
+    if not frame_files:
+        shutil.rmtree(event_dir, ignore_errors=True)
+        return
+
+    # Step 3: score and select top frames
+    scored: list[tuple[float, np.ndarray, str]] = []
+    for path in frame_files:
+        frame = cv2.imread(path)
+        if frame is None:
+            continue
+        plates = _analyzer.detect_plates(frame) if _analyzer else []
+        score = _frame_score(frame, plates)
+        scored.append((score, frame, path))
+
+    scored.sort(key=lambda x: -x[0])
+
+    # Delete frames below TOP_FRAMES
+    for _, _, path in scored[TOP_FRAMES:]:
+        os.remove(path)
+
+    # Rename kept frames to sorted order (best first = frame_0001)
+    kept = scored[:TOP_FRAMES]
+    for i, (_, _, old_path) in enumerate(kept):
+        new_path = os.path.join(event_dir, f"frame_{i+1:04d}.jpg")
+        if old_path != new_path:
+            os.rename(old_path, new_path)
+
+    best_frame = kept[0][1] if kept else None
+    if best_frame is None:
+        shutil.rmtree(event_dir, ignore_errors=True)
+        return
+
+    # Step 4: run LPR on best frame
+    plate, conf = ("", 0.0)
     if _analyzer:
-        plate, conf = _analyzer.read_plate(frame)
-
+        plate, conf = _analyzer.read_plate(best_frame)
     log.info(f"LPR: plate={plate!r} conf={conf:.2f}")
 
-    hex_color, color_name = extract_dominant_color_from_frame(frame)
+    # Step 5: save thumbnail (best frame)
+    snapshot_file = f"{event_id}.jpg"
+    snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
+    cv2.imwrite(snapshot_path, best_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+    hex_color, color_name = extract_dominant_color_from_frame(best_frame)
     insert_event(
         event_id, CAMERA_NAME, int(time.time()),
-        f"snapshots/{snapshot_file}", plate or None, hex_color, color_name,
+        f"snapshots/{snapshot_file}",
+        f"events/{event_id}/clip.mp4",
+        plate or None, hex_color, color_name,
     )
-    log.info(f"Stored: {event_id} | plate={plate} | color={color_name}")
+    log.info(f"Stored: {event_id[:8]} | plate={plate} | color={color_name} | frames={len(kept)}")
 
 
 def run_watcher():
     global _last_event_time, _analyzer
 
+    os.makedirs(EVENTS_DIR, exist_ok=True)
     log.info("Loading plate analyzer...")
     _analyzer = PlateAnalyzer()
 
@@ -184,7 +189,7 @@ def run_watcher():
                     now = time.time()
                     if now - _last_event_time > COOLDOWN:
                         _last_event_time = now
-                        log.info("Vehicle detected! Triggering capture...")
+                        log.info("Vehicle detected!")
                         _process_event()
         except Exception as e:
             log.error(f"Watcher loop error: {e}", exc_info=True)

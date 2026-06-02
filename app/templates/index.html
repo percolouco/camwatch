@@ -61,7 +61,7 @@
     <!-- Events grid -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {% for ev in events %}
-      <div class="card rounded-xl overflow-hidden">
+      <a href="/event/{{ ev.id }}" class="card rounded-xl overflow-hidden block hover:border-blue-500 transition-colors" style="text-decoration:none;color:inherit;">
         <!-- Snapshot -->
         <div class="relative bg-black" style="aspect-ratio:16/9;">
           {% if ev.snapshot_path %}
@@ -103,7 +103,7 @@
             {% endif %}
           </div>
         </div>
-      </div>
+      </a>
       {% endfor %}
     </div>
 

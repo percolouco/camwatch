@@ -14,6 +14,7 @@ services:
       - MODEL_CACHE=/models
       - DB_PATH=/data/camwatch.db
       - SNAPSHOTS_DIR=/data/snapshots
+      - EVENTS_DIR=/data/events
       - POLL_INTERVAL=2
       - CAPTURE_DURATION=15
       - CAPTURE_FPS=5
