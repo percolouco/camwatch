@@ -57,12 +57,22 @@
         </thead>
         <tbody>
           {% for e in entries %}
-          <tr class="border-b border-slate-800 hover:bg-slate-800/40">
+          <tr class="border-b border-slate-700">
             <td class="px-4 py-3">
               <span class="plate font-bold px-3 py-1 rounded text-sm" style="background:#14532d;color:#4ade80;border:1px solid #16a34a;">{{ e.plate }}</span>
             </td>
-            <td class="px-4 py-3 text-slate-300">{{ e.label or '—' }}</td>
-            <td class="px-4 py-3 text-slate-500 text-xs hidden sm:table-cell">{{ e.added_str }}</td>
+            <td class="px-4 py-3" colspan="2">
+              <form action="/whitelist/add" method="post" class="flex gap-2 items-center flex-wrap">
+                <input type="hidden" name="plate" value="{{ e.plate }}">
+                <input type="hidden" name="back" value="/whitelist">
+                <input type="text" name="label" value="{{ e.label or '' }}" placeholder="Libellé…"
+                       class="flex-1 text-sm font-medium"
+                       style="min-width:120px;background:#0f172a;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:4px 8px;">
+                <button type="submit" class="text-xs px-3 py-1 rounded whitespace-nowrap"
+                        style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">✓ Sauvegarder</button>
+              </form>
+            </td>
+            <td class="px-4 py-3 text-slate-500 text-xs hidden sm:table-cell whitespace-nowrap">{{ e.added_str }}</td>
             <td class="px-4 py-3 text-right">
               <form action="/whitelist/remove/{{ e.plate }}" method="post" class="inline"
                     onsubmit="return confirm('Retirer {{ e.plate }} de la liste blanche ?')">

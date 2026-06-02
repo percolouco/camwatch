@@ -70,11 +70,21 @@
                 <button type="submit" class="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-900 hover:border-red-700">✕ Retirer</button>
               </form>
               {% else %}
-              <form action="/whitelist/add" method="post" class="inline">
-                <input type="hidden" name="plate" value="{{ row.plate }}">
-                <input type="hidden" name="back" value="/stats">
-                <button type="submit" class="text-xs text-slate-400 hover:text-green-400 px-2 py-1 rounded border border-slate-700 hover:border-green-700">🛡 Whitelister</button>
-              </form>
+              <details class="inline-block text-left">
+                <summary class="text-xs text-slate-400 hover:text-green-400 px-2 py-1 rounded border border-slate-700 hover:border-green-700 cursor-pointer list-none">🛡 Whitelister</summary>
+                <div class="absolute z-10 mt-1 p-3 rounded-lg shadow-xl" style="background:#1e293b;border:1px solid #334155;min-width:220px;">
+                  <form action="/whitelist/add" method="post" class="space-y-2">
+                    <input type="hidden" name="plate" value="{{ row.plate }}">
+                    <input type="hidden" name="back" value="/stats">
+                    <div class="text-xs text-slate-400 mb-1">Libellé pour <strong class="text-green-400">{{ row.plate }}</strong></div>
+                    <input type="text" name="label" placeholder="Ex: Ma voiture"
+                           class="w-full text-sm"
+                           style="background:#0f172a;border:1px solid #475569;color:#e2e8f0;border-radius:6px;padding:5px 8px;">
+                    <button type="submit" class="w-full text-xs py-1.5 rounded"
+                            style="background:#166534;color:#4ade80;border:1px solid #16a34a;">✓ Confirmer</button>
+                  </form>
+                </div>
+              </details>
               {% endif %}
             </td>
           </tr>
