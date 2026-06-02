@@ -27,6 +27,7 @@ POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2"))
 CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
 CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
 COOLDOWN = int(os.environ.get("COOLDOWN", "60"))
+PLATERECOGNIZER_KEY = os.environ.get("PLATERECOGNIZER_API_KEY", "")
 
 _token: str | None = None
 _token_time = 0.0
@@ -144,32 +145,67 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         shutil.rmtree(event_dir, ignore_errors=True)
         return None
 
-    # Score ALL frames, rename sorted (best = frame_0001)
-    scored: list[tuple[float, np.ndarray, str]] = []
+    # Pass 1: rank all frames by sharpness (fast, no LPR)
+    sharpness: list[tuple[float, np.ndarray, str]] = []
     for path in frame_files:
         frame = cv2.imread(path)
         if frame is None:
             continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        lap = cv2.Laplacian(gray, cv2.CV_64F).var()
+        sharpness.append((lap, frame, path))
+    sharpness.sort(key=lambda x: -x[0])
+
+    # Pass 2: run YOLO only on top 10 sharpest frames → LPR-based score
+    top10 = sharpness[:10]
+    scored: list[tuple[float, np.ndarray, str]] = []
+    for _, frame, path in top10:
         plates = _analyzer.detect_plates(frame) if _analyzer else []
         score = _frame_score(frame, plates)
         scored.append((score, frame, path))
-
     scored.sort(key=lambda x: -x[0])
 
-    for i, (_, _, old_path) in enumerate(scored):
+    # Merge: LPR-ranked top10 first, then remaining by sharpness
+    lpr_paths = {path for _, _, path in scored}
+    rest = [(lap * 0.001, frame, path) for lap, frame, path in sharpness if path not in lpr_paths]
+    full_sorted = scored + rest
+
+    for i, (_, _, old_path) in enumerate(full_sorted):
         os.rename(old_path, old_path + ".tmp")
-    for i, (_, _, old_path) in enumerate(scored):
+    for i, (_, _, old_path) in enumerate(full_sorted):
         os.rename(old_path + ".tmp", os.path.join(event_dir, f"frame_{i+1:04d}.jpg"))
 
-    best_frame = scored[0][1] if scored else None
+    best_frame = full_sorted[0][1] if full_sorted else None
     if best_frame is None:
         shutil.rmtree(event_dir, ignore_errors=True)
         return None
 
-    # LPR on best frame
+    # LPR: PlateRecognizer API (top 3 frames) → fallback to local
     plate, conf, plate_bbox, plate_corrected = ("", 0.0, None, None)
-    if _analyzer:
+    if PLATERECOGNIZER_KEY:
+        from lpr import call_platerecognizer
+        for _, frame, _ in scored[:3]:
+            p, c = call_platerecognizer(frame, PLATERECOGNIZER_KEY)
+            if p and c > conf:
+                plate, conf = p, c
+            if conf >= 0.7:
+                break
+        if plate:
+            # Get local perspective-corrected crop for display
+            if _analyzer:
+                plates = _analyzer.detect_plates(best_frame)
+                if plates:
+                    x1, y1, x2, y2, _ = plates[0]
+                    quad = _analyzer._find_plate_quad(best_frame, int(x1), int(y1), int(x2), int(y2))
+                    plate_bbox = (int(x1), int(y1), int(x2), int(y2))
+                    plate_corrected = _analyzer._perspective_correct(best_frame, quad) if quad else None
+        else:
+            log.info("PlateRecognizer returned no result, falling back to local LPR")
+            if _analyzer:
+                plate, conf, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+    elif _analyzer:
         plate, conf, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+
     log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
     # Save raw plate crop (4× upscale) and the perspective-corrected OCR crop

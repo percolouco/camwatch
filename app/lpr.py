@@ -38,6 +38,38 @@ def _nms(boxes: list, iou_threshold: float = 0.3) -> list:
     return result
 
 
+def call_platerecognizer(frame: np.ndarray, api_key: str, region: str = "fr") -> tuple[str, float]:
+    """Send a frame to PlateRecognizer API. Returns (plate_text, confidence)."""
+    import requests as req
+
+    h, w = frame.shape[:2]
+    if w > 1920:
+        scale = 1920 / w
+        frame = cv2.resize(frame, (1920, int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    try:
+        resp = req.post(
+            "https://api.platerecognizer.com/v1/plate-reader/",
+            headers={"Authorization": f"Token {api_key}"},
+            files={"upload": ("frame.jpg", buf.tobytes(), "image/jpeg")},
+            data={"regions": region},
+            timeout=15,
+        )
+        data = resp.json()
+        results = data.get("results", [])
+        if results:
+            best = max(results, key=lambda r: r.get("score", 0))
+            plate = best.get("plate", "").upper().strip()
+            conf = float(best.get("score", 0))
+            if len([c for c in plate if c.isalnum()]) >= 4:
+                log.info(f"PlateRecognizer: {plate!r} conf={conf:.2f}")
+                return plate, conf
+    except Exception as e:
+        log.warning(f"PlateRecognizer API error: {e}")
+    return "", 0.0
+
+
 def _order_points(pts: np.ndarray) -> np.ndarray:
     """Order 4 points: top-left, top-right, bottom-right, bottom-left."""
     rect = np.zeros((4, 2), dtype=np.float32)
