@@ -221,7 +221,7 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
                     x1, y1, x2, y2, _ = plates[0]
                     quad = _analyzer._find_plate_quad(best_frame, int(x1), int(y1), int(x2), int(y2))
                     plate_bbox = (int(x1), int(y1), int(x2), int(y2))
-                    plate_corrected = _analyzer._perspective_correct(best_frame, quad) if quad else None
+                    plate_corrected = _analyzer._perspective_correct(best_frame, quad) if quad is not None else None
         else:
             log.info("PlateRecognizer returned no result, falling back to local LPR")
             if _analyzer:
