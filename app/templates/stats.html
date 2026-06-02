@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CamWatch — Statistiques</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+    .plate { font-family: monospace; letter-spacing: 0.12em; }
+    .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; text-decoration: none; display: inline-block; }
+    .btn-ghost:hover { background: #334155; color: #e2e8f0; }
+    label { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <header class="sticky top-0 z-10 px-4 py-3 flex items-center gap-3" style="background:#0f172a;border-bottom:1px solid #1e293b;">
+    <a href="/" class="btn-ghost">← Retour</a>
+    <span class="text-xl">📊</span>
+    <span class="font-bold flex-1">Statistiques de passages</span>
+    <a href="/whitelist" class="btn-ghost">🛡 Liste blanche</a>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-3 py-5">
+
+    {% if not stats %}
+    <div class="text-center py-20 text-slate-500">
+      <div class="text-5xl mb-4">📊</div>
+      <p>Aucune plaque enregistrée pour le moment.</p>
+    </div>
+    {% else %}
+    <div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-700">
+            <th class="text-left px-4 py-3 text-slate-400 font-semibold">#</th>
+            <th class="text-left px-4 py-3 text-slate-400 font-semibold">Plaque</th>
+            <th class="text-right px-4 py-3 text-slate-400 font-semibold">Passages</th>
+            <th class="text-left px-4 py-3 text-slate-400 font-semibold hidden md:table-cell">1er passage</th>
+            <th class="text-left px-4 py-3 text-slate-400 font-semibold hidden md:table-cell">Dernier passage</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in stats %}
+          <tr class="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
+            <td class="px-4 py-3 text-slate-500">{{ loop.index }}</td>
+            <td class="px-4 py-3">
+              <div class="flex items-center gap-2">
+                <a href="/?plate={{ row.plate }}"
+                   class="plate font-bold px-3 py-1 rounded text-sm"
+                   style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;text-decoration:none;">{{ row.plate }}</a>
+                {% if row.whitelisted %}
+                <span class="text-xs px-2 py-0.5 rounded" style="background:#14532d;color:#4ade80;border:1px solid #16a34a;">✓ connu</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="px-4 py-3 text-right">
+              <span class="font-bold text-white text-base">{{ row.count }}</span>
+              <span class="text-slate-500 text-xs ml-1">fois</span>
+            </td>
+            <td class="px-4 py-3 text-slate-400 hidden md:table-cell text-xs">{{ row.first_str }}</td>
+            <td class="px-4 py-3 text-slate-400 hidden md:table-cell text-xs">{{ row.last_str }}</td>
+            <td class="px-4 py-3 text-right">
+              {% if row.whitelisted %}
+              <form action="/whitelist/remove/{{ row.plate }}" method="post" class="inline">
+                <input type="hidden" name="back" value="/stats">
+                <button type="submit" class="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-red-900 hover:border-red-700">✕ Retirer</button>
+              </form>
+              {% else %}
+              <form action="/whitelist/add" method="post" class="inline">
+                <input type="hidden" name="plate" value="{{ row.plate }}">
+                <input type="hidden" name="back" value="/stats">
+                <button type="submit" class="text-xs text-slate-400 hover:text-green-400 px-2 py-1 rounded border border-slate-700 hover:border-green-700">🛡 Whitelister</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+  </main>
+</body>
+</html>

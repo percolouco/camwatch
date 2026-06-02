@@ -109,6 +109,7 @@ async def event_detail(request: Request, event_id: str):
     plate_ocr_abs = os.path.join(event_dir, "plate_ocr.jpg")
     plate_ocr = f"events/{event_id}/plate_ocr.jpg" if os.path.exists(plate_ocr_abs) else None
 
+    is_wl = database.is_whitelisted(ev.get("plate") or "")
     return templates.TemplateResponse("event_detail.html", {
         "request": request,
         "ev": ev,
@@ -120,6 +121,7 @@ async def event_detail(request: Request, event_id: str):
         "capture_duration": CAPTURE_DURATION,
         "capture_fps": CAPTURE_FPS,
         "capture_total": CAPTURE_DURATION * CAPTURE_FPS,
+        "is_whitelisted": is_wl,
     })
 
 
@@ -184,6 +186,39 @@ async def upload_clip(file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
     return RedirectResponse(f"/event/{event_id}", status_code=303)
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats_page(request: Request):
+    rows = database.get_plate_stats()
+    whitelist_plates = {w["plate"] for w in database.get_whitelist()}
+    for r in rows:
+        r["first_str"] = ts_to_str(r["first_seen"])
+        r["last_str"] = ts_to_str(r["last_seen"])
+        r["whitelisted"] = r["plate"] in whitelist_plates
+    return templates.TemplateResponse("stats.html", {"request": request, "stats": rows})
+
+
+@app.get("/whitelist", response_class=HTMLResponse)
+async def whitelist_page(request: Request):
+    entries = database.get_whitelist()
+    for e in entries:
+        e["added_str"] = ts_to_str(e["added_at"])
+    return templates.TemplateResponse("whitelist.html", {"request": request, "entries": entries})
+
+
+@app.post("/whitelist/add")
+async def whitelist_add(plate: str = Form(""), label: str = Form(""), back: str = Form("")):
+    plate = plate.strip().upper()
+    if plate:
+        database.add_to_whitelist(plate, label)
+    return RedirectResponse(back or "/whitelist", status_code=303)
+
+
+@app.post("/whitelist/remove/{plate}")
+async def whitelist_remove(plate: str, back: str = Form("")):
+    database.remove_from_whitelist(plate)
+    return RedirectResponse(back or "/whitelist", status_code=303)
 
 
 @app.get("/health")

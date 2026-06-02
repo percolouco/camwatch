@@ -35,6 +35,20 @@
     <a href="/" class="btn-ghost">← Retour</a>
     <span class="text-xl">🚗</span>
     <span class="font-bold flex-1">{{ ev.time_str }}</span>
+    {% if ev.plate %}
+    {% if is_whitelisted %}
+    <form action="/whitelist/remove/{{ ev.plate }}" method="post">
+      <input type="hidden" name="back" value="/event/{{ ev.id }}">
+      <button type="submit" class="btn-ghost text-green-400 hover:text-green-300 hover:border-green-600">🛡 Connu ✓</button>
+    </form>
+    {% else %}
+    <form action="/whitelist/add" method="post">
+      <input type="hidden" name="plate" value="{{ ev.plate }}">
+      <input type="hidden" name="back" value="/event/{{ ev.id }}">
+      <button type="submit" class="btn-ghost hover:text-green-400 hover:border-green-700">🛡 Whitelister</button>
+    </form>
+    {% endif %}
+    {% endif %}
     <form action="/event/{{ ev.id }}/delete" method="post"
           onsubmit="return confirm('Supprimer cet événement ?')">
       <button type="submit" class="btn-ghost text-red-400 hover:text-red-300 hover:border-red-500">✕ Supprimer</button>

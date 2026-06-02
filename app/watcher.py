@@ -255,6 +255,12 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
     snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
     cv2.imwrite(snapshot_path, best_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
+    from database import is_whitelisted
+    if plate and is_whitelisted(plate):
+        log.info(f"Skipped (whitelist): {plate} — event {event_id[:8]}")
+        shutil.rmtree(event_dir, ignore_errors=True)
+        return None
+
     hex_color, color_name = _vehicle_color(best_frame, plate_bbox)
     insert_event(
         event_id, camera_name, int(time.time()),

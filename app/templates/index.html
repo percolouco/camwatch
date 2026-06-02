@@ -33,6 +33,8 @@
     </div>
     <div class="flex items-center gap-2">
       <span class="text-slate-400 text-sm">{{ total }} passage{{ 's' if total != 1 else '' }}</span>
+      <a href="/stats" class="btn-upload" style="text-decoration:none;">📊 Stats</a>
+      <a href="/whitelist" class="btn-upload" style="text-decoration:none;">🛡 Whitelist</a>
       <button class="btn-upload" onclick="document.getElementById('upload-panel').classList.toggle('open')">⬆ Tester un clip</button>
     </div>
   </header>

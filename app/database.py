@@ -23,6 +23,13 @@ def init_db():
             processed_at INTEGER
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS whitelist (
+            plate TEXT PRIMARY KEY,
+            label TEXT,
+            added_at INTEGER
+        )
+    """)
     # Migrate existing DBs that lack clip_path
     try:
         conn.execute("ALTER TABLE events ADD COLUMN clip_path TEXT")
@@ -126,3 +133,57 @@ def get_cameras():
     rows = conn.execute("SELECT DISTINCT camera FROM events ORDER BY camera").fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+# ── Whitelist ─────────────────────────────────────────────────────────────────
+
+def get_whitelist() -> list[dict]:
+    conn = get_db()
+    rows = conn.execute("SELECT plate, label, added_at FROM whitelist ORDER BY added_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def is_whitelisted(plate: str) -> bool:
+    if not plate:
+        return False
+    conn = get_db()
+    row = conn.execute("SELECT plate FROM whitelist WHERE plate = ?", (plate.upper().strip(),)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def add_to_whitelist(plate: str, label: str = ""):
+    import time
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO whitelist (plate, label, added_at) VALUES (?, ?, ?)",
+        (plate.upper().strip(), label.strip(), int(time.time())),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_from_whitelist(plate: str):
+    conn = get_db()
+    conn.execute("DELETE FROM whitelist WHERE plate = ?", (plate.upper().strip(),))
+    conn.commit()
+    conn.close()
+
+
+# ── Stats ─────────────────────────────────────────────────────────────────────
+
+def get_plate_stats() -> list[dict]:
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT plate,
+               COUNT(*)        AS count,
+               MIN(start_time) AS first_seen,
+               MAX(start_time) AS last_seen
+        FROM events
+        WHERE plate IS NOT NULL AND plate != ''
+        GROUP BY plate
+        ORDER BY count DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
