@@ -145,29 +145,52 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         shutil.rmtree(event_dir, ignore_errors=True)
         return None
 
-    # Pass 1: rank all frames by sharpness (fast, no LPR)
-    sharpness: list[tuple[float, np.ndarray, str]] = []
+    # Pass 1: load all frames, compute sharpness + inter-frame motion
+    # Motion detection uses a downscaled gray image (fast) to find frames where
+    # the vehicle is present — a moving car causes high frame diff even when blurry.
+    _MOTION_W = 320
+    loaded: list[tuple[np.ndarray, str, float, float]] = []  # frame, path, sharpness, motion
+    prev_small: np.ndarray | None = None
+
     for path in frame_files:
         frame = cv2.imread(path)
         if frame is None:
             continue
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         lap = cv2.Laplacian(gray, cv2.CV_64F).var()
-        sharpness.append((lap, frame, path))
-    sharpness.sort(key=lambda x: -x[0])
+        h, w = gray.shape
+        small = cv2.resize(gray, (_MOTION_W, _MOTION_W * h // w))
+        motion = float(np.mean(np.abs(small.astype(np.float32) - prev_small.astype(np.float32)))) if prev_small is not None else 0.0
+        prev_small = small
+        loaded.append((frame, path, lap, motion))
 
-    # Pass 2: run YOLO only on top 10 sharpest frames → LPR-based score
-    top10 = sharpness[:10]
+    # Frame 0 has no predecessor — inherit frame 1's motion so car entering on first frame isn't missed
+    if len(loaded) > 1:
+        loaded[0] = (loaded[0][0], loaded[0][1], loaded[0][2], loaded[1][3])
+
+    max_sharp = max((x[2] for x in loaded), default=1.0) or 1.0
+    max_motion = max((x[3] for x in loaded), default=1.0) or 1.0
+
+    # Combined score: motion weighted higher to prioritise car-present frames,
+    # sharpness as tiebreaker within those frames.
+    combined: list[tuple[float, np.ndarray, str]] = sorted(
+        [(0.65 * m / max_motion + 0.35 * s / max_sharp, frame, path)
+         for frame, path, s, m in loaded],
+        key=lambda x: -x[0],
+    )
+
+    # Pass 2: YOLO on top 15 by combined score → plate-area × conf ranking
+    top15 = combined[:15]
     scored: list[tuple[float, np.ndarray, str]] = []
-    for _, frame, path in top10:
+    for _, frame, path in top15:
         plates = _analyzer.detect_plates(frame) if _analyzer else []
         score = _frame_score(frame, plates)
         scored.append((score, frame, path))
     scored.sort(key=lambda x: -x[0])
 
-    # Merge: LPR-ranked top10 first, then remaining by sharpness
-    lpr_paths = {path for _, _, path in scored}
-    rest = [(lap * 0.001, frame, path) for lap, frame, path in sharpness if path not in lpr_paths]
+    # Merge: YOLO-scored top15 first, then remaining frames by combined score
+    scored_paths = {path for _, _, path in scored}
+    rest = [(score, frame, path) for score, frame, path in combined if path not in scored_paths]
     full_sorted = scored + rest
 
     for i, (_, _, old_path) in enumerate(full_sorted):
