@@ -26,7 +26,6 @@ EVENTS_DIR = os.environ.get("EVENTS_DIR", "/data/events")
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2"))
 CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
 CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
-TOP_FRAMES = int(os.environ.get("TOP_FRAMES", "10"))
 COOLDOWN = int(os.environ.get("COOLDOWN", "60"))
 
 _token: str | None = None
@@ -133,11 +132,20 @@ def _process_event():
         shutil.rmtree(event_dir, ignore_errors=True)
         return
 
-    # Step 2: extract frames
+    # Step 2: extract all frames
     subprocess.run([
         "ffmpeg", "-y", "-i", clip_path,
         "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
     ], capture_output=True, timeout=30)
+
+    # Step 2b: remux clip for browser compatibility (moov atom at start)
+    web_clip = os.path.join(event_dir, "clip_web.mp4")
+    subprocess.run([
+        "ffmpeg", "-y", "-i", clip_path,
+        "-c", "copy", "-movflags", "+faststart", web_clip,
+    ], capture_output=True, timeout=20)
+    if os.path.exists(web_clip):
+        os.replace(web_clip, clip_path)
 
     frame_files = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
     log.info(f"Extracted {len(frame_files)} frames")
@@ -146,7 +154,7 @@ def _process_event():
         shutil.rmtree(event_dir, ignore_errors=True)
         return
 
-    # Step 3: score and select top frames
+    # Step 3: score ALL frames, rename sorted (best = frame_0001)
     scored: list[tuple[float, np.ndarray, str]] = []
     for path in frame_files:
         frame = cv2.imread(path)
@@ -158,18 +166,13 @@ def _process_event():
 
     scored.sort(key=lambda x: -x[0])
 
-    # Delete frames below TOP_FRAMES
-    for _, _, path in scored[TOP_FRAMES:]:
-        os.remove(path)
+    # Rename to sorted order (temp names to avoid collisions)
+    for i, (_, _, old_path) in enumerate(scored):
+        os.rename(old_path, old_path + ".tmp")
+    for i, (_, _, old_path) in enumerate(scored):
+        os.rename(old_path + ".tmp", os.path.join(event_dir, f"frame_{i+1:04d}.jpg"))
 
-    # Rename kept frames to sorted order (best first = frame_0001)
-    kept = scored[:TOP_FRAMES]
-    for i, (_, _, old_path) in enumerate(kept):
-        new_path = os.path.join(event_dir, f"frame_{i+1:04d}.jpg")
-        if old_path != new_path:
-            os.rename(old_path, new_path)
-
-    best_frame = kept[0][1] if kept else None
+    best_frame = scored[0][1] if scored else None
     if best_frame is None:
         shutil.rmtree(event_dir, ignore_errors=True)
         return

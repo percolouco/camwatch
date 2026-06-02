@@ -12,10 +12,21 @@
     .plate { font-family: monospace; letter-spacing: 0.15em; }
     .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; text-decoration: none; display: inline-block; }
     .btn-ghost:hover { background: #334155; color: #e2e8f0; }
-    .frame-thumb { cursor: pointer; border: 2px solid #334155; border-radius: 6px; overflow: hidden; transition: border-color 0.15s; }
-    .frame-thumb:hover { border-color: #3b82f6; }
+    .btn-dl { background: #166534; border: 1px solid #16a34a; color: #4ade80; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; text-decoration: none; display: inline-block; }
+    .btn-dl:hover { background: #14532d; }
+    .frame-thumb { cursor: zoom-in; border: 2px solid #334155; border-radius: 6px; overflow: hidden; transition: border-color 0.12s; }
+    .frame-thumb:hover { border-color: #60a5fa; }
     .frame-thumb.active { border-color: #3b82f6; }
     label { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+
+    /* Lightbox */
+    #lightbox { display:none; position:fixed; inset:0; z-index:50; background:rgba(0,0,0,0.92); align-items:center; justify-content:center; }
+    #lightbox.open { display:flex; }
+    #lightbox img { max-width:95vw; max-height:92vh; object-fit:contain; border-radius:4px; }
+    #lb-nav { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:12px; align-items:center; }
+    #lb-close { position:absolute; top:12px; right:16px; font-size:1.8rem; color:#94a3b8; cursor:pointer; line-height:1; }
+    #lb-close:hover { color:#fff; }
+    #lb-label { color:#94a3b8; font-size:0.85rem; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -28,10 +39,9 @@
 
   <main class="max-w-5xl mx-auto px-3 py-5 space-y-4">
 
-    <!-- Main image + info -->
+    <!-- Info + main image -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-      <!-- Info -->
       <div class="card p-4 space-y-4">
         <div>
           <label>Plaque</label>
@@ -45,7 +55,7 @@
         </div>
 
         <div>
-          <label>Couleur véhicule</label>
+          <label>Couleur</label>
           <div class="flex items-center gap-2 mt-1">
             <div class="w-7 h-7 rounded-full border-2 border-slate-600" style="background:{{ ev.color_hex or '#808080' }};"></div>
             <span class="font-medium">{{ ev.color_name or '—' }}</span>
@@ -53,35 +63,43 @@
           </div>
         </div>
 
-        <!-- Debug section -->
         <div class="pt-2 border-t border-slate-700">
           <label>Debug</label>
-          <div class="mt-1 space-y-1 text-xs font-mono text-slate-400">
+          <div class="mt-1 space-y-0.5 text-xs font-mono text-slate-400">
             <div>id: {{ ev.id[:8] }}…</div>
-            <div>frames: {{ frames|length }} / {{ capture_total }}</div>
+            <div>frames: {{ frames|length }} (~{{ capture_total }} capturées)</div>
             <div>clip: {% if ev.clip_path %}✓ {{ clip_size }}{% else %}—{% endif %}</div>
-            <div>snapshot: {% if ev.snapshot_path %}✓{% else %}—{% endif %}</div>
           </div>
         </div>
+
+        {% if has_clip %}
+        <a href="/{{ ev.clip_path }}" download class="btn-dl w-full text-center">⬇ Télécharger le clip</a>
+        {% endif %}
       </div>
 
-      <!-- Image viewer -->
       <div class="md:col-span-2 card overflow-hidden">
-        <div class="bg-black relative" style="aspect-ratio:16/9;">
+        <div class="bg-black relative cursor-zoom-in" style="aspect-ratio:16/9;"
+             onclick="openLightbox('/{{ ev.snapshot_path }}', 'Meilleure frame ★')">
           <img id="main-img"
                src="{% if ev.snapshot_path %}/{{ ev.snapshot_path }}{% endif %}"
                class="w-full h-full object-contain">
+          <span class="absolute bottom-2 right-2 text-xs text-slate-500">🔍 cliquer pour agrandir</span>
         </div>
-        <div class="px-3 py-2 text-xs text-slate-500 text-center" id="img-label">Meilleure frame (★)</div>
+        <div class="px-3 py-2 text-xs text-slate-500 text-center" id="img-label">Meilleure frame ★</div>
       </div>
     </div>
 
     <!-- Video clip -->
     {% if has_clip %}
     <div class="card p-4">
-      <label class="block mb-3">Clip vidéo — {{ capture_duration }}s</label>
+      <div class="flex items-center justify-between mb-3">
+        <label>Clip vidéo — {{ capture_duration }}s</label>
+        <a href="/{{ ev.clip_path }}" download class="btn-dl text-xs py-1 px-3">⬇ Télécharger</a>
+      </div>
       <video controls preload="metadata" class="w-full rounded-lg" style="max-height:380px;background:#000;">
         <source src="/{{ ev.clip_path }}" type="video/mp4">
+        <p class="text-slate-400 text-sm p-4">Lecture impossible dans le navigateur —
+          <a href="/{{ ev.clip_path }}" download class="text-blue-400 underline">télécharger le clip</a></p>
       </video>
     </div>
     {% else %}
@@ -91,38 +109,91 @@
     </div>
     {% endif %}
 
-    <!-- Frames gallery -->
+    <!-- All frames -->
     {% if frames %}
     <div class="card p-4">
-      <label class="block mb-3">Frames analysées — {{ frames|length }} meilleures (sur ~{{ capture_total }}), classées par score LPR</label>
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+      <label class="block mb-3">
+        Toutes les frames — {{ frames|length }} extraites à {{ capture_fps }}fps, triées meilleure plaque en premier
+      </label>
+      <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1.5">
         {% for frame_path in frames %}
         <div class="frame-thumb {% if loop.first %}active{% endif %}"
-             onclick="selectFrame(this, '/{{ frame_path }}', 'Frame #{{ loop.index }}{% if loop.first %} ★{% endif %}')">
+             onclick="selectFrame(this, '/{{ frame_path }}', 'Frame #{{ loop.index }}{% if loop.first %} ★{% endif %}')"
+             ondblclick="openLightbox('/{{ frame_path }}', 'Frame #{{ loop.index }}')">
           <img src="/{{ frame_path }}" class="w-full object-cover" style="aspect-ratio:16/9;" loading="lazy">
-          <div class="text-center text-xs text-slate-500 py-0.5 bg-slate-900">
+          <div class="text-center text-xs text-slate-500 py-0.5 bg-slate-900 leading-none">
             #{{ loop.index }}{% if loop.first %} ★{% endif %}
           </div>
         </div>
         {% endfor %}
       </div>
+      <p class="text-xs text-slate-600 mt-2">Clic simple → aperçu | Double-clic → plein écran</p>
     </div>
     {% else %}
     <div class="card p-4 text-slate-500 text-sm">
       <label class="block mb-1">Frames</label>
-      Événement antérieur à la fonctionnalité frames (pas de dossier /data/events/{{ ev.id[:8] }}…)
+      Événement antérieur à la fonctionnalité frames
     </div>
     {% endif %}
 
   </main>
 
+  <!-- Lightbox -->
+  <div id="lightbox" onclick="closeLightboxIfOutside(event)">
+    <span id="lb-close" onclick="closeLightbox()">×</span>
+    <img id="lb-img" src="" alt="">
+    <div id="lb-nav">
+      <button onclick="lbPrev()" class="btn-ghost px-4">←</button>
+      <span id="lb-label" class="text-slate-400 text-sm"></span>
+      <button onclick="lbNext()" class="btn-ghost px-4">→</button>
+    </div>
+  </div>
+
   <script>
+    let lbFrames = {{ frames | tojson }};
+    let lbIdx = 0;
+
+    function openLightbox(src, label) {
+      document.getElementById('lb-img').src = src;
+      document.getElementById('lb-label').textContent = label;
+      // Find index in frames array
+      const rel = src.startsWith('/') ? src.slice(1) : src;
+      lbIdx = lbFrames.indexOf(rel);
+      document.getElementById('lightbox').classList.add('open');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('open');
+    }
+
+    function closeLightboxIfOutside(e) {
+      if (e.target.id === 'lightbox') closeLightbox();
+    }
+
+    function lbGo(idx) {
+      if (lbFrames.length === 0) return;
+      lbIdx = ((idx % lbFrames.length) + lbFrames.length) % lbFrames.length;
+      document.getElementById('lb-img').src = '/' + lbFrames[lbIdx];
+      document.getElementById('lb-label').textContent = 'Frame #' + (lbIdx + 1) + (lbIdx === 0 ? ' ★' : '');
+    }
+
+    function lbPrev() { lbGo(lbIdx - 1); }
+    function lbNext() { lbGo(lbIdx + 1); }
+
     function selectFrame(el, src, label) {
       document.getElementById('main-img').src = src;
+      document.getElementById('main-img').parentElement.onclick = () => openLightbox(src, label);
       document.getElementById('img-label').textContent = label;
       document.querySelectorAll('.frame-thumb').forEach(t => t.classList.remove('active'));
       el.classList.add('active');
     }
+
+    document.addEventListener('keydown', e => {
+      if (!document.getElementById('lightbox').classList.contains('open')) return;
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'ArrowLeft') lbPrev();
+      if (e.key === 'ArrowRight') lbNext();
+    });
   </script>
 </body>
 </html>

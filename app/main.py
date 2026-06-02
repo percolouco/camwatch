@@ -80,7 +80,6 @@ async def index(
 
 CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
 CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
-TOP_FRAMES = int(os.environ.get("TOP_FRAMES", "10"))
 
 
 @app.get("/event/{event_id}", response_class=HTMLResponse)
@@ -109,8 +108,8 @@ async def event_detail(request: Request, event_id: str):
         "has_clip": has_clip,
         "clip_size": clip_size,
         "capture_duration": CAPTURE_DURATION,
+        "capture_fps": CAPTURE_FPS,
         "capture_total": CAPTURE_DURATION * CAPTURE_FPS,
-        "top_frames": TOP_FRAMES,
     })
 
 
