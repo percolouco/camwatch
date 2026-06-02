@@ -2,6 +2,9 @@ import os
 import time
 import uuid
 import logging
+import subprocess
+import tempfile
+import glob
 import requests
 import cv2
 import numpy as np
@@ -20,7 +23,8 @@ CAMERA_RTSP = os.environ.get("CAMERA_RTSP", "")
 CAMERA_NAME = os.environ.get("CAMERA_NAME", "portail")
 SNAPSHOTS_DIR = os.environ.get("SNAPSHOTS_DIR", "/data/snapshots")
 POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2"))
-CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "20"))
+CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
+CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
 COOLDOWN = int(os.environ.get("COOLDOWN", "60"))
 
 _token: str | None = None
@@ -86,34 +90,57 @@ def _frame_score(frame: np.ndarray, plates: list) -> float:
 
 def _capture_best_frame() -> np.ndarray | None:
     url = _rtsp_url()
-    log.info(f"Capturing RTSP for {CAPTURE_DURATION}s...")
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
-        log.error("Cannot open RTSP stream")
-        return None
+    log.info(f"Capturing {CAPTURE_DURATION}s at {CAPTURE_FPS}fps via ffmpeg...")
 
-    best_frame: np.ndarray | None = None
-    best_score = -1.0
-    start = time.time()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clip_path = os.path.join(tmpdir, "clip.mp4")
+        frames_pattern = os.path.join(tmpdir, "frame_%04d.jpg")
 
-    try:
-        while time.time() - start < CAPTURE_DURATION:
-            ret, frame = cap.read()
-            if not ret:
-                log.warning("RTSP read failed, retrying...")
-                time.sleep(0.5)
+        # Step 1: capture clip with ffmpeg (TCP for reliability)
+        ret = subprocess.run([
+            "ffmpeg", "-y",
+            "-rtsp_transport", "tcp",
+            "-i", url,
+            "-t", str(CAPTURE_DURATION),
+            "-c", "copy",
+            clip_path,
+        ], capture_output=True, timeout=CAPTURE_DURATION + 10)
+
+        if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
+            log.error(f"ffmpeg capture failed: {ret.stderr[-200:].decode(errors='ignore')}")
+            return None
+
+        # Step 2: extract frames at CAPTURE_FPS
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", clip_path,
+            "-vf", f"fps={CAPTURE_FPS}",
+            "-q:v", "2",
+            frames_pattern,
+        ], capture_output=True, timeout=30)
+
+        frame_files = sorted(glob.glob(os.path.join(tmpdir, "frame_*.jpg")))
+        log.info(f"Extracted {len(frame_files)} frames")
+
+        if not frame_files:
+            return None
+
+        # Step 3: score each frame, keep the best
+        best_frame: np.ndarray | None = None
+        best_score = -1.0
+
+        for path in frame_files:
+            frame = cv2.imread(path)
+            if frame is None:
                 continue
             plates = _analyzer.detect_plates(frame) if _analyzer else []
             score = _frame_score(frame, plates)
             if score > best_score:
                 best_score = score
                 best_frame = frame.copy()
-            time.sleep(0.8)
-    finally:
-        cap.release()
 
-    log.info(f"Capture done. Best frame score: {best_score:.2f}")
-    return best_frame
+        log.info(f"Best frame score: {best_score:.2f}")
+        return best_frame
 
 
 def _process_event():

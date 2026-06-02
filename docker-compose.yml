@@ -15,7 +15,8 @@ services:
       - DB_PATH=/data/camwatch.db
       - SNAPSHOTS_DIR=/data/snapshots
       - POLL_INTERVAL=2
-      - CAPTURE_DURATION=20
+      - CAPTURE_DURATION=15
+      - CAPTURE_FPS=5
       - COOLDOWN=60
     labels:
       - traefik.enable=true
