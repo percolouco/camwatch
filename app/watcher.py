@@ -138,14 +138,21 @@ def _process_event():
         "-vf", f"fps={CAPTURE_FPS}", "-q:v", "2", frames_pattern,
     ], capture_output=True, timeout=30)
 
-    # Step 2b: remux clip for browser compatibility (moov atom at start)
+    # Step 2b: transcode to H.264 baseline for browser compatibility
     web_clip = os.path.join(event_dir, "clip_web.mp4")
     subprocess.run([
         "ffmpeg", "-y", "-i", clip_path,
-        "-c", "copy", "-movflags", "+faststart", web_clip,
-    ], capture_output=True, timeout=20)
+        "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1",
+        "-preset", "fast", "-crf", "28",
+        "-vf", "scale=-2:720",     # downsample to 720p — enough for review
+        "-an",                     # no audio needed for surveillance
+        "-movflags", "+faststart", # moov atom at front for streaming
+        web_clip,
+    ], capture_output=True, timeout=60)
     if os.path.exists(web_clip):
         os.replace(web_clip, clip_path)
+    else:
+        log.warning("Transcode failed, keeping raw clip")
 
     frame_files = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
     log.info(f"Extracted {len(frame_files)} frames")
