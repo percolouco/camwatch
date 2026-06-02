@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CamWatch — Passages véhicules</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.7rem; font-weight:600; }
+    .plate { font-family: monospace; letter-spacing:0.1em; }
+    input, select { background:#0f172a; border:1px solid #475569; color:#e2e8f0; border-radius:6px; padding:6px 10px; }
+    input:focus, select:focus { outline:none; border-color:#60a5fa; }
+    .btn { background:#2563eb; color:#fff; border-radius:6px; padding:7px 16px; font-size:0.85rem; cursor:pointer; }
+    .btn:hover { background:#1d4ed8; }
+    .btn-ghost { background:#1e293b; border:1px solid #475569; color:#94a3b8; }
+    .btn-ghost:hover { background:#334155; color:#e2e8f0; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-10 px-4 py-3 flex items-center justify-between" style="background:#0f172a;border-bottom:1px solid #1e293b;">
+    <div class="flex items-center gap-2">
+      <span class="text-xl">🚗</span>
+      <span class="font-bold text-lg">CamWatch</span>
+      <span class="text-slate-500 text-sm hidden sm:inline">— Passages véhicules</span>
+    </div>
+    <span class="text-slate-400 text-sm">{{ total }} passage{{ 's' if total != 1 else '' }}</span>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-3 py-4">
+
+    <!-- Filters -->
+    <form method="get" class="flex flex-wrap gap-2 mb-5">
+      <input type="text" name="plate" placeholder="Plaque…" value="{{ filter_plate }}" class="w-32">
+      <select name="camera">
+        <option value="">Toutes caméras</option>
+        {% for cam in cameras %}
+        <option value="{{ cam }}" {% if cam == filter_camera %}selected{% endif %}>{{ cam }}</option>
+        {% endfor %}
+      </select>
+      <input type="date" name="date" value="{{ filter_date }}">
+      <button type="submit" class="btn">Filtrer</button>
+      {% if filter_plate or filter_camera or filter_date %}
+      <a href="/" class="btn btn-ghost">✕ Reset</a>
+      {% endif %}
+    </form>
+
+    <!-- Empty state -->
+    {% if not events %}
+    <div class="text-center py-20 text-slate-500">
+      <div class="text-5xl mb-4">📷</div>
+      <p class="text-lg">Aucun passage enregistré</p>
+      <p class="text-sm mt-1">En attente de détections Frigate…</p>
+    </div>
+    {% endif %}
+
+    <!-- Events grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for ev in events %}
+      <div class="card rounded-xl overflow-hidden">
+        <!-- Snapshot -->
+        <div class="relative bg-black" style="aspect-ratio:16/9;">
+          {% if ev.snapshot_path %}
+          <img src="/{{ ev.snapshot_path }}" alt="snapshot"
+               class="w-full h-full object-cover"
+               onerror="this.parentElement.innerHTML='<div class=\'w-full h-full flex items-center justify-center text-slate-600 text-3xl\'>📷</div>'">
+          {% else %}
+          <div class="w-full h-full flex items-center justify-center text-slate-600 text-3xl">📷</div>
+          {% endif %}
+          <!-- Camera badge -->
+          <span class="absolute top-2 left-2 badge" style="background:rgba(0,0,0,0.6);color:#94a3b8;">
+            {{ ev.camera }}
+          </span>
+        </div>
+
+        <!-- Info -->
+        <div class="p-3 space-y-2">
+          <!-- Time -->
+          <div class="flex items-center justify-between">
+            <span class="text-slate-300 text-sm font-medium">{{ ev.time_str }}</span>
+            <!-- Color swatch -->
+            <div class="flex items-center gap-1.5">
+              <div class="w-4 h-4 rounded-full border border-slate-600"
+                   style="background:{{ ev.color_hex or '#808080' }};"
+                   title="{{ ev.color_hex }}"></div>
+              <span class="text-slate-400 text-xs">{{ ev.color_name or '—' }}</span>
+            </div>
+          </div>
+
+          <!-- Plate -->
+          <div class="flex items-center gap-2">
+            {% if ev.plate %}
+            <span class="plate text-sm font-bold px-3 py-1 rounded"
+                  style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">
+              {{ ev.plate }}
+            </span>
+            {% else %}
+            <span class="text-slate-500 text-sm italic">Plaque non lue</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if total_pages > 1 %}
+    <div class="flex items-center justify-center gap-2 mt-6">
+      {% if page > 1 %}
+      <a href="?page={{ page - 1 }}&plate={{ filter_plate }}&camera={{ filter_camera }}&date={{ filter_date }}"
+         class="btn btn-ghost text-sm">← Préc.</a>
+      {% endif %}
+      <span class="text-slate-400 text-sm">Page {{ page }} / {{ total_pages }}</span>
+      {% if page < total_pages %}
+      <a href="?page={{ page + 1 }}&plate={{ filter_plate }}&camera={{ filter_camera }}&date={{ filter_date }}"
+         class="btn btn-ghost text-sm">Suiv. →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+
+  </main>
+
+  <!-- Auto-refresh every 60s -->
+  <script>
+    setTimeout(() => location.reload(), 60000);
+  </script>
+</body>
+</html>

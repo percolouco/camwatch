@@ -1,0 +1,24 @@
+services:
+  camwatch:
+    build: .
+    container_name: camwatch
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      - FRIGATE_URL=http://frigate:5000
+      - DB_PATH=/data/camwatch.db
+      - SNAPSHOTS_DIR=/data/snapshots
+      - POLL_INTERVAL=30
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.camwatch.rule=Host(`camwatch.nas.percolouco.com`)
+      - traefik.http.routers.camwatch.entrypoints=websecure
+      - traefik.http.routers.camwatch.tls.certresolver=letsencrypt
+      - traefik.http.services.camwatch.loadbalancer.server.port=8000
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
