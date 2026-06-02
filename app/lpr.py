@@ -111,11 +111,12 @@ class PlateAnalyzer:
         avg_conf = float(np.mean(confs)) if confs else 0.0
         return text, avg_conf
 
-    def read_plate(self, frame: np.ndarray) -> tuple[str, float]:
-        """Detect plate in frame, read text. Returns (plate_text, confidence)."""
+    def read_plate(self, frame: np.ndarray) -> tuple[str, float, tuple | None]:
+        """Detect plate, read text. Returns (plate_text, confidence, bbox_or_None).
+        bbox = (x1, y1, x2, y2) in pixel coords."""
         plate_boxes = self.detect_plates(frame)
         if not plate_boxes:
-            return "", 0.0
+            return "", 0.0, None
 
         x1, y1, x2, y2, plate_conf = plate_boxes[0]
         pad = 8
@@ -130,6 +131,6 @@ class PlateAnalyzer:
         # Filter noise: plate must have at least 4 alphanumeric chars
         alnum = "".join(c for c in text if c.isalnum())
         if len(alnum) < 4:
-            return "", 0.0
+            return "", 0.0, (int(x1), int(y1), int(x2), int(y2))
 
-        return text, (plate_conf + ocr_conf) / 2.0
+        return text, (plate_conf + ocr_conf) / 2.0, (int(x1), int(y1), int(x2), int(y2))

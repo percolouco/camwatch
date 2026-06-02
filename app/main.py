@@ -78,6 +78,11 @@ async def index(
     })
 
 
+CAPTURE_DURATION = int(os.environ.get("CAPTURE_DURATION", "15"))
+CAPTURE_FPS = int(os.environ.get("CAPTURE_FPS", "5"))
+TOP_FRAMES = int(os.environ.get("TOP_FRAMES", "10"))
+
+
 @app.get("/event/{event_id}", response_class=HTMLResponse)
 async def event_detail(request: Request, event_id: str):
     ev = database.get_event(event_id)
@@ -86,18 +91,26 @@ async def event_detail(request: Request, event_id: str):
 
     ev["time_str"] = ts_to_str(ev["start_time"])
 
-    # List frames for this event
     event_dir = os.path.join(EVENTS_DIR, event_id)
     frame_paths = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
-    frames = [f"events/{event_id}/frame_{i+1:04d}.jpg" for i in range(len(frame_paths))]
+    frames = [f"events/{event_id}/{os.path.basename(p)}" for p in frame_paths]
 
-    has_clip = ev.get("clip_path") and os.path.exists(os.path.join("/data", ev["clip_path"]))
+    clip_abs = os.path.join("/data", ev["clip_path"]) if ev.get("clip_path") else None
+    has_clip = bool(clip_abs and os.path.exists(clip_abs))
+    clip_size = ""
+    if has_clip:
+        size = os.path.getsize(clip_abs)
+        clip_size = f"{size // 1024 // 1024}MB" if size > 1024 * 1024 else f"{size // 1024}KB"
 
     return templates.TemplateResponse("event_detail.html", {
         "request": request,
         "ev": ev,
         "frames": frames,
         "has_clip": has_clip,
+        "clip_size": clip_size,
+        "capture_duration": CAPTURE_DURATION,
+        "capture_total": CAPTURE_DURATION * CAPTURE_FPS,
+        "top_frames": TOP_FRAMES,
     })
 
 

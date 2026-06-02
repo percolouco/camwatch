@@ -80,6 +80,29 @@ def _get_ai_state() -> dict | None:
     return None
 
 
+def _vehicle_color(frame: np.ndarray, plate_bbox: tuple | None) -> tuple[str, str]:
+    """Extract dominant color from the vehicle body (above the plate, or center frame)."""
+    h, w = frame.shape[:2]
+    if plate_bbox:
+        px1, py1, px2, py2 = plate_bbox
+        pw = px2 - px1
+        ph = py2 - py1
+        # Vehicle body: above plate, same horizontal span expanded ×3
+        crop_x1 = max(0, px1 - pw * 2)
+        crop_x2 = min(w, px2 + pw * 2)
+        crop_y2 = max(0, py1 - 5)
+        crop_y1 = max(0, py1 - ph * 10)  # 10× plate height above plate
+        if crop_y2 > crop_y1 and crop_x2 > crop_x1:
+            crop = frame[int(crop_y1):int(crop_y2), int(crop_x1):int(crop_x2)]
+            return extract_dominant_color_from_frame(crop)
+    # Fallback: center 50% of image (excludes sky at top, road at bottom)
+    cy1 = h // 4
+    cy2 = 3 * h // 4
+    cx1 = w // 4
+    cx2 = 3 * w // 4
+    return extract_dominant_color_from_frame(frame[cy1:cy2, cx1:cx2])
+
+
 def _frame_score(frame: np.ndarray, plates: list) -> float:
     if plates:
         x1, y1, x2, y2, conf = plates[0]
@@ -152,17 +175,18 @@ def _process_event():
         return
 
     # Step 4: run LPR on best frame
-    plate, conf = ("", 0.0)
+    plate, conf, plate_bbox = ("", 0.0, None)
     if _analyzer:
-        plate, conf = _analyzer.read_plate(best_frame)
-    log.info(f"LPR: plate={plate!r} conf={conf:.2f}")
+        plate, conf, plate_bbox = _analyzer.read_plate(best_frame)
+    log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
     # Step 5: save thumbnail (best frame)
     snapshot_file = f"{event_id}.jpg"
     snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
     cv2.imwrite(snapshot_path, best_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
-    hex_color, color_name = extract_dominant_color_from_frame(best_frame)
+    # Color: crop vehicle body above plate (avoids sky/road)
+    hex_color, color_name = _vehicle_color(best_frame, plate_bbox)
     insert_event(
         event_id, CAMERA_NAME, int(time.time()),
         f"snapshots/{snapshot_file}",
