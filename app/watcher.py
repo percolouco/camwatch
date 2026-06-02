@@ -203,7 +203,7 @@ def _process_event():
         f"events/{event_id}/clip.mp4",
         plate or None, hex_color, color_name,
     )
-    log.info(f"Stored: {event_id[:8]} | plate={plate} | color={color_name} | frames={len(kept)}")
+    log.info(f"Stored: {event_id[:8]} | plate={plate} | color={color_name} | frames={len(frame_files)}")
 
 
 def run_watcher():
