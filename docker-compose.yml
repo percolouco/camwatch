@@ -16,8 +16,8 @@ services:
       - SNAPSHOTS_DIR=/data/snapshots
       - EVENTS_DIR=/data/events
       - POLL_INTERVAL=2
-      - CAPTURE_DURATION=15
-      - CAPTURE_FPS=5
+      - CAPTURE_DURATION=20
+      - CAPTURE_FPS=2
       - COOLDOWN=60
       - PLATERECOGNIZER_API_KEY=c1127284b5ef06b49ade33f1dfc0f50169b88c1d
     labels:

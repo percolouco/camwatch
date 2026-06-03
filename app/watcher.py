@@ -34,6 +34,20 @@ _token_time = 0.0
 _last_event_time = 0.0
 _analyzer: PlateAnalyzer | None = None
 
+import re as _re
+_FR_PLATE_RE = _re.compile(r'^([A-Z]{2})(\d{3})([A-Z]{2})$')
+
+def _normalize_plate(raw: str) -> str:
+    """Validate and format a French plate (6-8 alphanumeric chars).
+    Standard new format AB-123-CD is detected and hyphenated automatically."""
+    alnum = "".join(c for c in raw.upper() if c.isalnum())
+    if len(alnum) < 6 or len(alnum) > 8:
+        return ""
+    m = _FR_PLATE_RE.match(alnum)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return alnum
+
 
 def _rtsp_url() -> str:
     if CAMERA_RTSP:
@@ -209,6 +223,7 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         from lpr import call_platerecognizer
         for _, frame, _ in scored[:3]:
             p, c = call_platerecognizer(frame, PLATERECOGNIZER_KEY)
+            p = _normalize_plate(p)
             if p and c > conf:
                 plate, conf = p, c
             if conf >= 0.7:
@@ -225,9 +240,13 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         else:
             log.info("PlateRecognizer returned no result, falling back to local LPR")
             if _analyzer:
-                plate, conf, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+                _p, _c, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+                plate = _normalize_plate(_p)
+                conf = _c if plate else 0.0
     elif _analyzer:
-        plate, conf, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+        _p, _c, plate_bbox, plate_corrected = _analyzer.read_plate(best_frame)
+        plate = _normalize_plate(_p)
+        conf = _c if plate else 0.0
 
     log.info(f"LPR: plate={plate!r} conf={conf:.2f} bbox={plate_bbox}")
 
