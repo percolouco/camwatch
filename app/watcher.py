@@ -35,7 +35,28 @@ _last_event_time = 0.0
 _analyzer: PlateAnalyzer | None = None
 
 import re as _re
+import json as _json
+
 _FR_PLATE_RE = _re.compile(r'^([A-Z]{2})(\d{3})([A-Z]{2})$')
+_ZONE_PATH = "/data/zone.json"
+
+
+def _read_zone_points() -> list | None:
+    try:
+        with open(_ZONE_PATH) as f:
+            pts = _json.load(f).get("points", [])
+        if len(pts) >= 3:
+            return pts
+    except Exception:
+        pass
+    return None
+
+
+def _zone_mask(h: int, w: int, pts: list) -> np.ndarray:
+    poly = np.array([[int(x * w), int(y * h)] for x, y in pts], dtype=np.int32)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [poly], 255)
+    return mask
 
 def _normalize_plate(raw: str) -> str:
     """Validate and format a French plate (6-8 alphanumeric chars).
@@ -189,6 +210,9 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
     loaded: list[tuple[np.ndarray, str, float, float]] = []  # frame, path, sharpness, motion
     prev_small: np.ndarray | None = None
 
+    zone_pts = _read_zone_points()
+    zone_mask_small: np.ndarray | None = None  # computed lazily on first frame
+
     for path in frame_files:
         frame = cv2.imread(path)
         if frame is None:
@@ -197,7 +221,16 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
         lap = cv2.Laplacian(gray, cv2.CV_64F).var()
         h, w = gray.shape
         small = cv2.resize(gray, (_MOTION_W, _MOTION_W * h // w))
-        motion = float(np.mean(np.abs(small.astype(np.float32) - prev_small.astype(np.float32)))) if prev_small is not None else 0.0
+        if zone_mask_small is None and zone_pts:
+            sh, sw = small.shape
+            zone_mask_small = cv2.resize(_zone_mask(h, w, zone_pts), (sw, sh))
+        if prev_small is not None:
+            diff = np.abs(small.astype(np.float32) - prev_small.astype(np.float32))
+            if zone_mask_small is not None:
+                diff = diff * (zone_mask_small.astype(np.float32) / 255.0)
+            motion = float(np.mean(diff))
+        else:
+            motion = 0.0
         prev_small = small
         loaded.append((frame, path, lap, motion))
 
@@ -221,6 +254,13 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
     scored: list[tuple[float, np.ndarray, str]] = []
     for _, frame, path in top15:
         plates = _analyzer.detect_plates(frame) if _analyzer else []
+        if plates and zone_pts:
+            fh, fw = frame.shape[:2]
+            poly = np.array([[int(x * fw), int(y * fh)] for x, y in zone_pts], dtype=np.int32)
+            plates = [p for p in plates
+                      if cv2.pointPolygonTest(poly.reshape(-1, 1, 2),
+                                              ((p[0] + p[2]) / 2, (p[1] + p[3]) / 2),
+                                              False) >= 0]
         score = _frame_score(frame, plates)
         scored.append((score, frame, path))
     scored.sort(key=lambda x: -x[0])

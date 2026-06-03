@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CamWatch — Zone de détection</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+    .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; text-decoration: none; display: inline-block; cursor: pointer; }
+    .btn-ghost:hover { background: #334155; color: #e2e8f0; }
+    .btn-primary { background: #1d4ed8; border: 1px solid #3b82f6; color: #bfdbfe; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; cursor: pointer; }
+    .btn-primary:hover { background: #1e40af; }
+    .btn-danger { background: #1e293b; border: 1px solid #7f1d1d; color: #fca5a5; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; cursor: pointer; }
+    .btn-danger:hover { background: #450a0a; }
+    label { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    #canvas-wrap { position: relative; width: 100%; background: #000; border-radius: 8px; overflow: hidden; }
+    #zone-canvas { display: block; width: 100%; cursor: crosshair; user-select: none; }
+    #zone-canvas.closed-mode { cursor: default; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <header class="sticky top-0 z-10 px-4 py-3 flex items-center gap-3" style="background:#0f172a;border-bottom:1px solid #1e293b;">
+    <a href="/" class="btn-ghost">← Retour</a>
+    <span class="text-xl">⬡</span>
+    <span class="font-bold flex-1">Zone de détection</span>
+    <button onclick="loadSnapshot()" class="btn-ghost text-sm" id="btn-snap">📷 Snapshot live</button>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-3 py-5 space-y-4">
+
+    <!-- Canvas -->
+    <div class="card overflow-hidden">
+      <div id="canvas-wrap">
+        <canvas id="zone-canvas"></canvas>
+      </div>
+      <div class="px-3 py-2 flex items-center justify-between flex-wrap gap-2" style="background:#111827;">
+        <span id="zone-status" class="text-sm text-slate-400">
+          {% if zone.points %}Zone active — {{ zone.points | length }} points{% else %}Aucune zone définie{% endif %}
+        </span>
+        <div class="flex items-center gap-2">
+          <button onclick="undoPoint()" class="btn-ghost text-xs py-1 px-2">↩ Annuler</button>
+          <button onclick="resetZone()" class="btn-ghost text-xs py-1 px-2">✕ Effacer</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info + actions -->
+    <div class="card p-4 space-y-3">
+      <div id="zone-info" class="text-sm text-slate-400">
+        {% if zone.points %}
+        <span class="text-green-400 font-medium">✓ Zone active</span> — {{ zone.points | length }} points définis.
+        Seuls les mouvements et détections à l'intérieur de cette zone seront pris en compte.
+        {% else %}
+        <span class="text-slate-500">Aucune zone définie</span> — toute l'image est utilisée pour la détection.
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button onclick="saveZone()" class="btn-primary px-5 py-2" id="btn-save">
+          💾 Enregistrer la zone
+        </button>
+        {% if zone.points %}
+        <button onclick="deleteZone()" class="btn-danger">🗑 Supprimer la zone</button>
+        {% endif %}
+        <span id="save-feedback" class="text-sm hidden"></span>
+      </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="card p-5 space-y-3 text-sm text-slate-400">
+      <label class="block">Comment utiliser</label>
+      <ul class="space-y-2 list-disc ml-4">
+        <li><strong class="text-slate-200">Clique</strong> sur l'image pour ajouter les points du polygone dans l'ordre</li>
+        <li><strong class="text-slate-200">Clique près du premier point</strong> (cercle rouge) ou <strong class="text-slate-200">double-clique</strong> pour fermer le polygone</li>
+        <li>Utilise <strong class="text-slate-200">Snapshot live</strong> pour récupérer l'image actuelle de ta caméra comme fond</li>
+        <li>La zone s'applique à : scoring de mouvement inter-frames, filtrage des détections YOLO</li>
+        <li>Les voitures dont la plaque sort de la zone seront ignorées</li>
+      </ul>
+      <div class="p-3 rounded-lg text-xs" style="background:#1c2942;border:1px solid #1e3a5f;color:#93c5fd;">
+        💡 Dessine autour de la partie de l'image où les voitures passent (ex: ta voie d'accès, la rue devant le portail). Exclue ton jardin, la végétation, le ciel.
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const canvas = document.getElementById('zone-canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    let points = [];   // normalized [[x,y], ...] in 0..1
+    let closed = false;
+
+    // ── Load existing zone ─────────────────────────────────────────────────
+    const existingPoints = {{ (zone.points or []) | tojson }};
+    if (existingPoints.length >= 3) {
+      points = existingPoints;
+      closed = true;
+    }
+
+    // ── Image loading ──────────────────────────────────────────────────────
+    img.onload = function() {
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const wrap = document.getElementById('canvas-wrap');
+      canvas.style.width  = '100%';
+      canvas.style.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth) + 'px';
+      redraw();
+    };
+
+    {% if latest_frame %}
+    img.src = '/{{ latest_frame }}';
+    {% endif %}
+
+    window.addEventListener('resize', () => {
+      if (!img.naturalWidth) return;
+      const wrap = document.getElementById('canvas-wrap');
+      canvas.style.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth) + 'px';
+      redraw();
+    });
+
+    // ── Coord helpers ──────────────────────────────────────────────────────
+    function clientToNorm(cx, cy) {
+      const r = canvas.getBoundingClientRect();
+      return [(cx - r.left) * (canvas.width  / r.width)  / canvas.width,
+              (cy - r.top)  * (canvas.height / r.height) / canvas.height];
+    }
+
+    function normToCanvas(nx, ny) {
+      return [nx * canvas.width, ny * canvas.height];
+    }
+
+    // screen-space distance from canvas point (nx,ny) to client point (cx,cy)
+    function screenDist(nx, ny, cx, cy) {
+      const r = canvas.getBoundingClientRect();
+      const sx = nx * r.width, sy = ny * r.height;
+      const px = cx - r.left,  py = cy - r.top;
+      return Math.hypot(sx - px, sy - py);
+    }
+
+    // ── Mouse interaction ──────────────────────────────────────────────────
+    canvas.addEventListener('click', e => {
+      if (closed) return;
+      const [nx, ny] = clientToNorm(e.clientX, e.clientY);
+      // Close if clicking near first point (< 16px screen distance)
+      if (points.length >= 3 && screenDist(points[0][0], points[0][1], e.clientX, e.clientY) < 16) {
+        closed = true;
+        updateStatus();
+        redraw();
+        return;
+      }
+      points.push([nx, ny]);
+      updateStatus();
+      redraw();
+    });
+
+    canvas.addEventListener('dblclick', e => {
+      if (points.length >= 3 && !closed) {
+        closed = true;
+        updateStatus();
+        redraw();
+      }
+      e.preventDefault();
+    });
+
+    // ── Render ─────────────────────────────────────────────────────────────
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (img.complete && img.naturalWidth) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      if (points.length === 0) return;
+
+      const cp = points.map(([nx, ny]) => normToCanvas(nx, ny));
+
+      // Draw polygon path
+      ctx.beginPath();
+      ctx.moveTo(cp[0][0], cp[0][1]);
+      for (let i = 1; i < cp.length; i++) ctx.lineTo(cp[i][0], cp[i][1]);
+      if (closed) {
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.22)';
+        ctx.fill();
+      }
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth   = Math.max(2, canvas.width / 700);
+      ctx.setLineDash(closed ? [] : [canvas.width / 100, canvas.width / 200]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Draw vertex points
+      const r = Math.max(6, canvas.width / 280);
+      cp.forEach(([cx, cy], i) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? '#ef4444' : '#3b82f6';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = Math.max(1.5, canvas.width / 900);
+        ctx.stroke();
+        // Point index label
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.max(10, canvas.width / 220)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if (i === 0 && !closed) ctx.fillText('⬤', cx, cy);
+        else ctx.fillText(i + 1, cx, cy);
+      });
+
+      canvas.style.cursor = closed ? 'default' : 'crosshair';
+    }
+
+    // ── Controls ───────────────────────────────────────────────────────────
+    function undoPoint() {
+      if (closed) { closed = false; } else { points.pop(); }
+      updateStatus();
+      redraw();
+    }
+
+    function resetZone() {
+      points = []; closed = false;
+      updateStatus();
+      redraw();
+    }
+
+    function updateStatus() {
+      const el = document.getElementById('zone-status');
+      if (closed) {
+        el.innerHTML = `<span class="text-green-400">✓ Zone fermée</span> — ${points.length} points · Clique "Enregistrer" pour sauvegarder`;
+      } else if (points.length >= 3) {
+        el.textContent = `${points.length} points — double-clique ou clique sur ⬤ pour fermer`;
+      } else if (points.length > 0) {
+        el.textContent = `${points.length} point${points.length > 1 ? 's' : ''} — continue à cliquer pour définir la zone`;
+      } else {
+        el.textContent = 'Aucune zone — clique sur l\'image pour commencer';
+      }
+    }
+
+    // ── Save / Delete ──────────────────────────────────────────────────────
+    async function saveZone() {
+      if (!closed && points.length < 3) {
+        showFeedback('⚠ Ferme le polygone d\'abord (double-clique ou clique sur le premier point)', 'yellow');
+        return;
+      }
+      const body = JSON.stringify({ points: closed ? points : [] });
+      try {
+        const r = await fetch('/config/zone', { method: 'POST', headers: {'Content-Type':'application/json'}, body });
+        const data = await r.json();
+        if (data.ok) showFeedback(`✓ Zone enregistrée — ${points.length} points`, 'green');
+        else showFeedback('Erreur: ' + (data.error || 'inconnue'), 'red');
+      } catch(e) { showFeedback('Erreur réseau: ' + e.message, 'red'); }
+    }
+
+    async function deleteZone() {
+      if (!confirm('Supprimer la zone de détection ?')) return;
+      try {
+        const r = await fetch('/config/zone', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({points:[]}) });
+        const data = await r.json();
+        if (data.ok) {
+          points = []; closed = false;
+          redraw();
+          showFeedback('Zone supprimée — toute l\'image sera utilisée', 'slate');
+          updateStatus();
+          document.getElementById('zone-info').innerHTML = '<span class="text-slate-500">Aucune zone définie</span> — toute l\'image est utilisée pour la détection.';
+        }
+      } catch(e) { showFeedback('Erreur: ' + e.message, 'red'); }
+    }
+
+    function showFeedback(msg, color) {
+      const el = document.getElementById('save-feedback');
+      const colors = {green:'text-green-400', red:'text-red-400', yellow:'text-yellow-400', slate:'text-slate-400'};
+      el.className = `text-sm ${colors[color] || 'text-slate-400'}`;
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 5000);
+    }
+
+    // ── Live snapshot ──────────────────────────────────────────────────────
+    async function loadSnapshot() {
+      const btn = document.getElementById('btn-snap');
+      btn.textContent = '⏳ Capture en cours…';
+      btn.disabled = true;
+      try {
+        const r = await fetch('/config/snapshot');
+        if (!r.ok) throw new Error('RTSP inaccessible');
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        img.src = url;
+        showFeedback('✓ Snapshot chargé', 'green');
+      } catch(e) {
+        showFeedback('Snapshot échoué: ' + e.message, 'red');
+      } finally {
+        btn.textContent = '📷 Snapshot live';
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

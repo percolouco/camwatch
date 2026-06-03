@@ -316,6 +316,82 @@ async def whitelist_remove(plate: str, back: str = Form("")):
     return RedirectResponse(back or "/whitelist", status_code=303)
 
 
+ZONE_PATH = "/data/zone.json"
+
+
+@app.get("/config/zone", response_class=HTMLResponse)
+async def zone_page(request: Request):
+    import json
+    zone: dict = {}
+    if os.path.exists(ZONE_PATH):
+        try:
+            with open(ZONE_PATH) as f:
+                zone = json.load(f)
+        except Exception:
+            pass
+
+    latest_frame = None
+    events = database.get_events(limit=1)
+    if events:
+        eid = events[0]["id"]
+        bf = os.path.join(EVENTS_DIR, eid, "best_frame.jpg")
+        if os.path.exists(bf):
+            latest_frame = f"events/{eid}/best_frame.jpg"
+        else:
+            first = sorted(glob.glob(os.path.join(EVENTS_DIR, eid, "frame_*.jpg")))
+            if first:
+                latest_frame = f"events/{eid}/{os.path.basename(first[0])}"
+
+    return templates.TemplateResponse("zone.html", {
+        "request": request,
+        "zone": zone,
+        "latest_frame": latest_frame,
+    })
+
+
+@app.post("/config/zone")
+async def save_zone(request: Request):
+    import json
+    data = await request.json()
+    points = data.get("points", [])
+    if len(points) == 0:
+        if os.path.exists(ZONE_PATH):
+            os.unlink(ZONE_PATH)
+        return {"ok": True, "deleted": True}
+    if len(points) < 3:
+        raise HTTPException(400, "Minimum 3 points requis")
+    with open(ZONE_PATH, "w") as f:
+        json.dump({"points": points}, f)
+    return {"ok": True, "points": len(points)}
+
+
+@app.get("/config/snapshot")
+async def live_snapshot():
+    import tempfile, cv2
+    url = watcher._rtsp_url()
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        tmp_path = f.name
+
+    def _grab():
+        subprocess.run([
+            "ffmpeg", "-y", "-rtsp_transport", "tcp",
+            "-i", url, "-vframes", "1", "-q:v", "2", tmp_path,
+        ], capture_output=True, timeout=10)
+        return os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0
+
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, _grab)
+    if ok:
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+        os.unlink(tmp_path)
+        from fastapi.responses import Response
+        return Response(content=data, media_type="image/jpeg")
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
+    raise HTTPException(500, "Snapshot RTSP impossible")
+
+
 @app.post("/event/{event_id}/test-lpr")
 async def test_lpr(event_id: str, frame_path: str = Form(""), bbox: str = Form("")):
     import json, base64, cv2, numpy as np
