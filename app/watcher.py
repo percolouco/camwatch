@@ -377,6 +377,7 @@ def run_watcher():
                         _last_event_time = now
                         log.info("Vehicle detected!")
                         _process_event()
+            time.sleep(POLL_INTERVAL)
         except Exception as e:
             log.error(f"Watcher loop error: {e}", exc_info=True)
-        time.sleep(POLL_INTERVAL)
+            time.sleep(POLL_INTERVAL)

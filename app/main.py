@@ -26,11 +26,20 @@ os.makedirs(os.path.join(ANNOTATIONS_DIR, "images"), exist_ok=True)
 os.makedirs(os.path.join(ANNOTATIONS_DIR, "labels"), exist_ok=True)
 
 
+def _watcher_supervisor():
+    while True:
+        t = threading.Thread(target=watcher.run_watcher, daemon=True, name="watcher")
+        t.start()
+        t.join()
+        logging.warning("Watcher thread exited unexpectedly — restarting in 5s")
+        time.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.init_db()
-    t = threading.Thread(target=watcher.run_watcher, daemon=True)
-    t.start()
+    sup = threading.Thread(target=_watcher_supervisor, daemon=True, name="watcher-supervisor")
+    sup.start()
     yield
 
 
