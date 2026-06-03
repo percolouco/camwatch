@@ -41,6 +41,34 @@ _FR_PLATE_RE = _re.compile(r'^([A-Z]{2})(\d{3})([A-Z]{2})$')
 _ZONE_PATH = "/data/zone.json"
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    m, n = len(a), len(b)
+    if m == 0: return n
+    if n == 0: return m
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            dp[j] = prev if a[i-1] == b[j-1] else min(prev, dp[j], dp[j-1]) + 1
+            prev = temp
+    return dp[n]
+
+
+def _match_history(plate_alnum: str) -> str | None:
+    """Return a known plate from DB if it's within 1 edit of plate_alnum (alnum only)."""
+    from database import get_plate_stats
+    best_dist, best_plate = 2, None
+    for row in get_plate_stats():
+        known_alnum = "".join(c for c in row["plate"] if c.isalnum())
+        d = _levenshtein(plate_alnum, known_alnum)
+        if 0 < d < best_dist:
+            best_dist, best_plate = d, row["plate"]
+    return best_plate
+
+
 def _read_zone_points() -> list | None:
     try:
         with open(_ZONE_PATH) as f:
@@ -297,13 +325,31 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
 
     if PLATERECOGNIZER_KEY:
         from lpr import call_platerecognizer
-        for _, frame, _ in scored[:3]:
-            p, c = call_platerecognizer(_zone_crop(frame), PLATERECOGNIZER_KEY)
+        from collections import Counter
+
+        # Always query all 3 top frames — 3 calls/passage fits comfortably in quota
+        pr_results: list[tuple[str, float]] = []
+        for _, api_frame, _ in scored[:3]:
+            p, c = call_platerecognizer(_zone_crop(api_frame), PLATERECOGNIZER_KEY)
             p = _normalize_plate(p)
-            if p and c > conf:
-                plate, conf = p, c
-            if conf >= 0.7:
-                break
+            if p:
+                pr_results.append((p, c))
+
+        if pr_results:
+            # Vote by alnum form so "GV-665-FJ" and "GV665FJ" count as the same
+            alnum_list = ["".join(ch for ch in p if ch.isalnum()) for p, _ in pr_results]
+            vote = Counter(alnum_list)
+            best_alnum, votes = vote.most_common(1)[0]
+            candidates = [(p, c) for (p, c), a in zip(pr_results, alnum_list) if a == best_alnum]
+            plate, conf = max(candidates, key=lambda x: x[1])
+            log.info(f"PlateRecognizer: {plate!r} conf={conf:.2f} ({votes}/{len(pr_results)} frames agree)")
+
+            # Fuzzy history correction — fix single-char OCR noise against known plates
+            hist = _match_history("".join(c for c in plate if c.isalnum()))
+            if hist:
+                log.info(f"History correction: {plate!r} → {hist!r}")
+                plate = hist
+
         if plate:
             # Get local perspective-corrected crop for display
             if _analyzer:
