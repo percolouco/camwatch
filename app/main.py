@@ -325,17 +325,25 @@ async def test_lpr(event_id: str, frame_path: str = Form(""), bbox: str = Form("
         raise HTTPException(404, "Frame introuvable")
 
     def _run():
+        try:
+            return _run_inner()
+        except Exception as e:
+            logging.exception("test-lpr unhandled error")
+            return {"error": str(e)}
+
+    def _run_inner():
         frame = cv2.imread(frame_abs)
         if frame is None:
             return {"error": "Impossible de lire l'image"}
 
-        result: dict = {"has_pr": bool(PLATERECOGNIZER_KEY)}
+        pr_key = watcher.PLATERECOGNIZER_KEY
+        result: dict = {"has_pr": bool(pr_key)}
 
-        if PLATERECOGNIZER_KEY:
+        if pr_key:
             from lpr import call_platerecognizer
-            from watcher import _normalize_plate
-            p, c = call_platerecognizer(frame, PLATERECOGNIZER_KEY)
+            p, c = call_platerecognizer(frame, pr_key)
             if p:
+                from watcher import _normalize_plate
                 result["platerecognizer"] = {
                     "plate": _normalize_plate(p) or p,
                     "raw": p,
