@@ -282,10 +282,23 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
 
     # LPR: PlateRecognizer API (top 3 frames) → fallback to local
     plate, conf, plate_bbox, plate_corrected = ("", 0.0, None, None)
+
+    # If a zone is defined, crop frames to its bounding box before sending to API
+    # → smaller payload, faster transfer, better focus for the recognizer
+    def _zone_crop(f: np.ndarray) -> np.ndarray:
+        if not zone_pts:
+            return f
+        fh, fw = f.shape[:2]
+        xs = [int(x * fw) for x, y in zone_pts]
+        ys = [int(y * fh) for x, y in zone_pts]
+        x1c, x2c = max(0, min(xs)), min(fw, max(xs))
+        y1c, y2c = max(0, min(ys)), min(fh, max(ys))
+        return f[y1c:y2c, x1c:x2c] if x2c > x1c and y2c > y1c else f
+
     if PLATERECOGNIZER_KEY:
         from lpr import call_platerecognizer
         for _, frame, _ in scored[:3]:
-            p, c = call_platerecognizer(frame, PLATERECOGNIZER_KEY)
+            p, c = call_platerecognizer(_zone_crop(frame), PLATERECOGNIZER_KEY)
             p = _normalize_plate(p)
             if p and c > conf:
                 plate, conf = p, c

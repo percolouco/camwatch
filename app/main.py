@@ -5,6 +5,7 @@ import logging
 import threading
 import tempfile
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
