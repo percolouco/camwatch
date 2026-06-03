@@ -19,8 +19,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 
 SNAPSHOTS_DIR = os.environ.get("SNAPSHOTS_DIR", "/data/snapshots")
 EVENTS_DIR = os.environ.get("EVENTS_DIR", "/data/events")
+ANNOTATIONS_DIR = os.environ.get("ANNOTATIONS_DIR", "/data/annotations")
 os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 os.makedirs(EVENTS_DIR, exist_ok=True)
+os.makedirs(os.path.join(ANNOTATIONS_DIR, "images"), exist_ok=True)
+os.makedirs(os.path.join(ANNOTATIONS_DIR, "labels"), exist_ok=True)
 
 
 @asynccontextmanager
@@ -34,6 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/snapshots", StaticFiles(directory=SNAPSHOTS_DIR), name="snapshots")
 app.mount("/events", StaticFiles(directory=EVENTS_DIR), name="events")
+app.mount("/annotations", StaticFiles(directory=ANNOTATIONS_DIR), name="annotations")
 
 templates = Jinja2Templates(directory="/app/templates")
 
@@ -186,6 +190,83 @@ async def upload_clip(file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
     return RedirectResponse(f"/event/{event_id}", status_code=303)
+
+
+@app.get("/event/{event_id}/annotate", response_class=HTMLResponse)
+async def annotate_page(request: Request, event_id: str):
+    ev = database.get_event(event_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+    ev["time_str"] = ts_to_str(ev["start_time"])
+    event_dir = os.path.join(EVENTS_DIR, event_id)
+    frame_paths = sorted(glob.glob(os.path.join(event_dir, "frame_*.jpg")))
+    frames = [f"events/{event_id}/{os.path.basename(p)}" for p in frame_paths]
+    ann_count = database.count_annotations()
+    return templates.TemplateResponse("annotate.html", {
+        "request": request,
+        "ev": ev,
+        "frames": frames,
+        "ann_count": ann_count,
+    })
+
+
+@app.post("/event/{event_id}/annotate")
+async def save_annotation(
+    event_id: str,
+    frame_path: str = Form(""),
+    plate: str = Form(""),
+    bbox: str = Form(""),
+):
+    import json, uuid
+    ev = database.get_event(event_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+    plate = plate.strip().upper()
+    if not plate or not frame_path or not bbox:
+        raise HTTPException(status_code=400, detail="Données manquantes")
+    try:
+        box = json.loads(bbox)
+        cx, cy, bw, bh = float(box["cx"]), float(box["cy"]), float(box["w"]), float(box["h"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="bbox invalide")
+
+    ann_id = str(uuid.uuid4())
+    src = os.path.join("/data", frame_path)
+    dst_img = os.path.join(ANNOTATIONS_DIR, "images", f"{ann_id}.jpg")
+    shutil.copy2(src, dst_img)
+    with open(os.path.join(ANNOTATIONS_DIR, "labels", f"{ann_id}.txt"), "w") as f:
+        f.write(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+    csv_path = os.path.join(ANNOTATIONS_DIR, "plates.csv")
+    with open(csv_path, "a") as f:
+        f.write(f"{ann_id}.jpg,{plate}\n")
+    database.save_annotation(ann_id, event_id, frame_path, plate, cx, cy, bw, bh)
+    return RedirectResponse(f"/event/{event_id}?annotated=1", status_code=303)
+
+
+@app.get("/dataset/export")
+async def export_annotations():
+    import zipfile, io
+    from fastapi.responses import StreamingResponse
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        img_dir = os.path.join(ANNOTATIONS_DIR, "images")
+        lbl_dir = os.path.join(ANNOTATIONS_DIR, "labels")
+        csv_path = os.path.join(ANNOTATIONS_DIR, "plates.csv")
+        for f in glob.glob(os.path.join(img_dir, "*.jpg")):
+            zf.write(f, f"images/{os.path.basename(f)}")
+        for f in glob.glob(os.path.join(lbl_dir, "*.txt")):
+            zf.write(f, f"labels/{os.path.basename(f)}")
+        if os.path.exists(csv_path):
+            zf.write(csv_path, "plates.csv")
+        # data.yaml for YOLO training
+        yaml_content = "path: .\ntrain: images\nval: images\nnc: 1\nnames: ['license_plate']\n"
+        zf.writestr("data.yaml", yaml_content)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=camwatch_dataset.zip"},
+    )
 
 
 @app.get("/stats", response_class=HTMLResponse)

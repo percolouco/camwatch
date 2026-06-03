@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CamWatch — Annotation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+    .plate { font-family: monospace; letter-spacing: 0.12em; }
+    .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; text-decoration: none; display: inline-block; }
+    .btn-ghost:hover { background: #334155; color: #e2e8f0; }
+    label { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+
+    #canvas-wrap { position: relative; width: 100%; background: #000; border-radius: 8px; overflow: hidden; }
+    #ann-canvas { display: block; width: 100%; cursor: crosshair; }
+
+    .frame-thumb { cursor: pointer; border: 2px solid #334155; border-radius: 4px; overflow: hidden; transition: border-color 0.1s; }
+    .frame-thumb:hover { border-color: #60a5fa; }
+    .frame-thumb.active { border-color: #3b82f6; }
+
+    input[type=text] { background: #0f172a; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; padding: 8px 12px; width: 100%; font-size: 1rem; }
+    input[type=text]:focus { outline: none; border-color: #60a5fa; }
+
+    .tuto-step { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #1e293b; }
+    .tuto-step:last-child { border-bottom: none; }
+    .tuto-num { width: 28px; height: 28px; border-radius: 50%; background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb;
+                display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85rem; flex-shrink: 0; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <header class="sticky top-0 z-10 px-4 py-3 flex items-center gap-3" style="background:#0f172a;border-bottom:1px solid #1e293b;">
+    <a href="/event/{{ ev.id }}" class="btn-ghost">← Retour</a>
+    <span class="text-xl">✏</span>
+    <span class="font-bold flex-1 truncate">Annotation — {{ ev.time_str }}</span>
+    <span class="text-slate-500 text-sm hidden sm:inline">{{ ann_count }} annotation{{ 's' if ann_count != 1 else '' }} au total</span>
+    <a href="/dataset/export" class="btn-ghost text-green-400 border-green-900 hover:border-green-700">⬇ Export dataset</a>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-3 py-4 space-y-4">
+
+    <!-- Main annotation area -->
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+
+      <!-- Frame selector (left column) -->
+      <div class="card p-3 lg:col-span-1">
+        <label class="block mb-2">Frames — clique pour choisir</label>
+        {% if frames %}
+        <div class="grid grid-cols-3 lg:grid-cols-2 gap-1.5 max-h-96 overflow-y-auto pr-1">
+          {% for fp in frames %}
+          <div class="frame-thumb {% if loop.first %}active{% endif %}"
+               onclick="selectFrame(this, '/{{ fp }}')">
+            <img src="/{{ fp }}" class="w-full object-cover" style="aspect-ratio:16/9;" loading="lazy">
+            <div class="text-center text-xs text-slate-500 py-0.5 bg-slate-900 leading-none">#{{ loop.index }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-slate-500 text-sm">Aucune frame disponible.</p>
+        {% endif %}
+      </div>
+
+      <!-- Canvas + controls (right column) -->
+      <div class="lg:col-span-3 space-y-3">
+
+        <!-- Canvas -->
+        <div class="card overflow-hidden">
+          <div id="canvas-wrap">
+            <canvas id="ann-canvas"></canvas>
+          </div>
+          <div class="px-3 py-2 flex items-center justify-between flex-wrap gap-2" style="background:#111827;">
+            <span id="bbox-status" class="text-sm text-slate-500">Clique et glisse sur l'image pour dessiner le rectangle autour de la plaque</span>
+            <button onclick="clearRect()" class="btn-ghost text-xs py-1 px-3">✕ Effacer le rectangle</button>
+          </div>
+        </div>
+
+        <!-- Form -->
+        <form id="ann-form" action="/event/{{ ev.id }}/annotate" method="post">
+          <input type="hidden" name="frame_path" id="input-frame" value="{{ frames[0] if frames else '' }}">
+          <input type="hidden" name="bbox" id="input-bbox" value="">
+
+          <div class="card p-4 space-y-4">
+            <div>
+              <label class="block mb-1">Plaque d'immatriculation (texte correct)</label>
+              <input type="text" name="plate" id="input-plate"
+                     value="{{ ev.plate or '' }}"
+                     placeholder="Ex: AB-123-CD"
+                     class="font-mono uppercase text-lg"
+                     oninput="this.value = this.value.toUpperCase()">
+            </div>
+
+            <div id="save-area" class="flex items-center gap-3 flex-wrap">
+              <button type="submit" id="btn-save"
+                      class="px-6 py-2 rounded font-medium"
+                      style="background:#166534;color:#4ade80;border:1px solid #16a34a;">
+                ✓ Sauvegarder l'annotation
+              </button>
+              <span id="save-warning" class="text-yellow-400 text-sm hidden">⚠ Dessine d'abord le rectangle autour de la plaque</span>
+              <span id="save-ok" class="text-green-400 text-sm hidden">✓ Rectangle défini — prêt à sauvegarder</span>
+            </div>
+          </div>
+        </form>
+
+      </div>
+    </div>
+
+    <!-- Tutorial -->
+    <div class="card p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="text-lg">📖</span>
+        <span class="font-bold text-slate-200">Comment annoter — Guide</span>
+        <span class="ml-auto text-slate-500 text-sm">{{ ann_count }} annotation{{ 's' if ann_count != 1 else '' }} collectée{{ 's' if ann_count != 1 else '' }}</span>
+      </div>
+
+      <div class="tuto-step">
+        <div class="tuto-num">1</div>
+        <div>
+          <p class="text-slate-200 font-medium text-sm">Choisis la meilleure frame</p>
+          <p class="text-slate-400 text-sm mt-0.5">Dans la grille à gauche, clique sur la frame où la plaque est <strong class="text-white">la plus visible et la plus nette</strong>. Les frames sont déjà triées : la #1 est celle que l'IA considère la meilleure.</p>
+        </div>
+      </div>
+
+      <div class="tuto-step">
+        <div class="tuto-num">2</div>
+        <div>
+          <p class="text-slate-200 font-medium text-sm">Dessine le rectangle autour de la plaque</p>
+          <p class="text-slate-400 text-sm mt-0.5"><strong class="text-white">Clique et glisse</strong> sur l'image pour tracer un rectangle qui entoure la plaque d'immatriculation. Inclus un petit peu de marge autour. Si tu te trompes, clique "Effacer" et recommence.</p>
+        </div>
+      </div>
+
+      <div class="tuto-step">
+        <div class="tuto-num">3</div>
+        <div>
+          <p class="text-slate-200 font-medium text-sm">Saisis la plaque correcte</p>
+          <p class="text-slate-400 text-sm mt-0.5">Tape la plaque que tu <strong class="text-white">vois réellement</strong> sur l'image (pas ce que l'IA a lu). Format : <code class="text-blue-400">AB-123-CD</code>. C'est cette valeur qui servira d'étiquette pour entraîner le modèle.</p>
+        </div>
+      </div>
+
+      <div class="tuto-step">
+        <div class="tuto-num">4</div>
+        <div>
+          <p class="text-slate-200 font-medium text-sm">Sauvegarde</p>
+          <p class="text-slate-400 text-sm mt-0.5">Clique "Sauvegarder". L'image et les coordonnées sont copiées dans le dataset local. Tu peux annoter plusieurs frames du même passage si la plaque est visible sous différents angles.</p>
+        </div>
+      </div>
+
+      <div class="tuto-step">
+        <div class="tuto-num">5</div>
+        <div>
+          <p class="text-slate-200 font-medium text-sm">Exporter et entraîner</p>
+          <p class="text-slate-400 text-sm mt-0.5">Une fois ~100-200 images annotées, clique <strong class="text-white">"Export dataset"</strong> en haut à droite. Tu obtiens un fichier <code class="text-blue-400">.zip</code> avec :</p>
+          <ul class="text-slate-400 text-sm mt-1 ml-4 list-disc space-y-0.5">
+            <li><code>images/</code> — les frames annotées</li>
+            <li><code>labels/</code> — les coordonnées YOLO (<code>classe cx cy w h</code>, normalisées 0→1)</li>
+            <li><code>plates.csv</code> — le texte de chaque plaque pour l'OCR</li>
+            <li><code>data.yaml</code> — config prête pour l'entraînement YOLOv8/v9</li>
+          </ul>
+          <p class="text-slate-400 text-sm mt-1">Ce dataset peut être utilisé sur <strong class="text-white">Google Colab</strong> (GPU gratuit) pour fine-tuner le détecteur en ~30 minutes. Le nouveau <code>.onnx</code> remplace ensuite celui dans <code>/models/</code>.</p>
+        </div>
+      </div>
+
+      <div class="mt-4 p-3 rounded-lg text-sm" style="background:#1c2942;border:1px solid #1e3a5f;color:#93c5fd;">
+        <strong>💡 Conseil :</strong> annote 2-3 passages par semaine. Après ~150 annotations, le modèle fine-tuné reconnaîtra mieux ton angle de caméra spécifique et les conditions lumineuses de ton portail.
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const canvas = document.getElementById('ann-canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    let currentFrameSrc = '';
+    let startX = 0, startY = 0, endX = 0, endY = 0;
+    let isDrawing = false;
+    let rect = null;  // finalized {x, y, w, h} in canvas pixels
+
+    // ── Image loading ──────────────────────────────────────────────────────
+    function loadImage(src) {
+      img.src = src;
+    }
+
+    img.onload = function() {
+      const wrap = document.getElementById('canvas-wrap');
+      canvas.width = wrap.clientWidth;
+      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
+      redraw();
+    };
+
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const r = isDrawing
+        ? { x: Math.min(startX, endX), y: Math.min(startY, endY),
+            w: Math.abs(endX - startX), h: Math.abs(endY - startY) }
+        : rect;
+      if (r && r.w > 4 && r.h > 4) {
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = 'rgba(59,130,246,0.12)';
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        // Corner handles
+        const hs = 8;
+        ctx.fillStyle = '#3b82f6';
+        [[r.x,r.y],[r.x+r.w,r.y],[r.x,r.y+r.h],[r.x+r.w,r.y+r.h]].forEach(([hx,hy]) => {
+          ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
+        });
+      }
+    }
+
+    // ── Mouse events ───────────────────────────────────────────────────────
+    function evPos(e) {
+      const r = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / r.width;
+      const scaleY = canvas.height / r.height;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return [(clientX - r.left) * scaleX, (clientY - r.top) * scaleY];
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      [startX, startY] = evPos(e);
+      isDrawing = true;
+      rect = null;
+      updateStatus(false);
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (!isDrawing) return;
+      [endX, endY] = evPos(e);
+      redraw();
+    });
+    canvas.addEventListener('mouseup', e => {
+      if (!isDrawing) return;
+      [endX, endY] = evPos(e);
+      isDrawing = false;
+      const x = Math.min(startX, endX), y = Math.min(startY, endY);
+      const w = Math.abs(endX - startX), h = Math.abs(endY - startY);
+      if (w > 8 && h > 4) {
+        rect = { x, y, w, h };
+        updateBbox();
+        updateStatus(true);
+      } else {
+        rect = null;
+        updateStatus(false);
+      }
+      redraw();
+    });
+
+    // Touch support
+    canvas.addEventListener('touchstart', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousedown', {clientX: e.touches[0].clientX, clientY: e.touches[0].clientY})); });
+    canvas.addEventListener('touchmove', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousemove', {clientX: e.touches[0].clientX, clientY: e.touches[0].clientY})); });
+    canvas.addEventListener('touchend', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mouseup', {clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY})); });
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function updateBbox() {
+      if (!rect) { document.getElementById('input-bbox').value = ''; return; }
+      const cx = (rect.x + rect.w / 2) / canvas.width;
+      const cy = (rect.y + rect.h / 2) / canvas.height;
+      const bw = rect.w / canvas.width;
+      const bh = rect.h / canvas.height;
+      document.getElementById('input-bbox').value = JSON.stringify(
+        { cx: +cx.toFixed(6), cy: +cy.toFixed(6), w: +bw.toFixed(6), h: +bh.toFixed(6) }
+      );
+    }
+
+    function updateStatus(ok) {
+      document.getElementById('bbox-status').textContent = ok
+        ? `Rectangle défini — ${Math.round(rect.w)}×${Math.round(rect.h)}px`
+        : 'Clique et glisse sur l\'image pour dessiner le rectangle autour de la plaque';
+      document.getElementById('save-warning').classList.toggle('hidden', ok);
+      document.getElementById('save-ok').classList.toggle('hidden', !ok);
+    }
+
+    function clearRect() {
+      rect = null;
+      isDrawing = false;
+      document.getElementById('input-bbox').value = '';
+      updateStatus(false);
+      redraw();
+    }
+
+    function selectFrame(el, src) {
+      document.querySelectorAll('.frame-thumb').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+      currentFrameSrc = src;
+      document.getElementById('input-frame').value = src.startsWith('/') ? src.slice(1) : src;
+      clearRect();
+      loadImage(src);
+    }
+
+    // ── Form validation ────────────────────────────────────────────────────
+    document.getElementById('ann-form').addEventListener('submit', function(e) {
+      if (!document.getElementById('input-bbox').value) {
+        e.preventDefault();
+        document.getElementById('save-warning').classList.remove('hidden');
+        document.getElementById('save-ok').classList.add('hidden');
+        canvas.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+
+    // ── Init ───────────────────────────────────────────────────────────────
+    {% if frames %}
+    loadImage('/{{ frames[0] }}');
+    currentFrameSrc = '/{{ frames[0] }}';
+    {% endif %}
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (!img.src) return;
+      const wrap = document.getElementById('canvas-wrap');
+      canvas.width = wrap.clientWidth;
+      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
+      redraw();
+    });
+  </script>
+</body>
+</html>

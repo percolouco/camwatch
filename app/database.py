@@ -30,6 +30,19 @@ def init_db():
             added_at INTEGER
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS annotations (
+            id TEXT PRIMARY KEY,
+            event_id TEXT,
+            frame_path TEXT,
+            plate_text TEXT,
+            bbox_cx REAL,
+            bbox_cy REAL,
+            bbox_w REAL,
+            bbox_h REAL,
+            created_at INTEGER
+        )
+    """)
     # Migrate existing DBs that lack clip_path
     try:
         conn.execute("ALTER TABLE events ADD COLUMN clip_path TEXT")
@@ -169,6 +182,44 @@ def remove_from_whitelist(plate: str):
     conn.execute("DELETE FROM whitelist WHERE plate = ?", (plate.upper().strip(),))
     conn.commit()
     conn.close()
+
+
+# ── Annotations ───────────────────────────────────────────────────────────────
+
+def save_annotation(ann_id: str, event_id: str, frame_path: str, plate_text: str,
+                    cx: float, cy: float, w: float, h: float):
+    import time
+    conn = get_db()
+    conn.execute("""
+        INSERT OR REPLACE INTO annotations
+        (id, event_id, frame_path, plate_text, bbox_cx, bbox_cy, bbox_w, bbox_h, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (ann_id, event_id, frame_path, plate_text, cx, cy, w, h, int(time.time())))
+    conn.commit()
+    conn.close()
+
+
+def count_annotations() -> int:
+    conn = get_db()
+    count = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_annotations() -> list[dict]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM annotations ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_annotated_event_ids() -> set:
+    conn = get_db()
+    rows = conn.execute("SELECT DISTINCT event_id FROM annotations").fetchall()
+    conn.close()
+    return {r[0] for r in rows}
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

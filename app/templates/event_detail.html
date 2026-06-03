@@ -35,6 +35,7 @@
     <a href="/" class="btn-ghost">← Retour</a>
     <span class="text-xl">🚗</span>
     <span class="font-bold flex-1">{{ ev.time_str }}</span>
+    <a href="/event/{{ ev.id }}/annotate" class="btn-ghost">✏ Annoter</a>
     {% if ev.plate %}
     {% if is_whitelisted %}
     <form action="/whitelist/remove/{{ ev.plate }}" method="post">
