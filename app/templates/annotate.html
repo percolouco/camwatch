@@ -75,7 +75,7 @@
             <div class="flex items-center gap-2">
               <span id="zoom-label" class="text-xs text-slate-500 font-mono">100%</span>
               <button onclick="resetZoom()" class="btn-ghost text-xs py-1 px-2">⊡ 1:1</button>
-              <button id="btn-fullres" onclick="openFullRes()" class="btn-ghost text-xs py-1 px-2">🔍 Plein écran</button>
+              <a id="btn-fullres" href="#" target="_blank" class="btn-ghost text-xs py-1 px-2" style="text-decoration:none;">🔍 Plein écran</a>
               <button onclick="clearRect()" class="btn-ghost text-xs py-1 px-3">✕ Effacer</button>
             </div>
           </div>
@@ -417,15 +417,12 @@
       redraw();
     }
 
-    function openFullRes() {
-      if (currentFrameSrc) window.open(currentFrameSrc, '_blank');
-    }
-
     function selectFrame(el, src) {
       document.querySelectorAll('.frame-thumb').forEach(t => t.classList.remove('active'));
       el.classList.add('active');
       currentFrameSrc = src;
       document.getElementById('input-frame').value = src.startsWith('/') ? src.slice(1) : src;
+      document.getElementById('btn-fullres').href = src;
       clearRect();
       resetZoom();
       img.src = src;
@@ -433,9 +430,13 @@
 
     // ── Image loading ──────────────────────────────────────────────────────
     img.onload = function() {
+      // Use native resolution as canvas coordinate space so zoom shows real pixels
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      // Scale CSS display to fit container width
       const wrap = document.getElementById('canvas-wrap');
-      canvas.width  = wrap.clientWidth;
-      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
+      canvas.style.width  = '100%';
+      canvas.style.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth) + 'px';
       vp = { scale: 1, tx: 0, ty: 0 };
       document.getElementById('zoom-label').textContent = '100%';
       redraw();
@@ -454,16 +455,15 @@
     // ── Init ───────────────────────────────────────────────────────────────
     {% if frames %}
     currentFrameSrc = '/{{ frames[0] }}';
+    document.getElementById('btn-fullres').href = currentFrameSrc;
     img.src = currentFrameSrc;
     {% endif %}
 
     window.addEventListener('resize', () => {
       if (!img.complete || !img.naturalWidth) return;
+      // Canvas internal resolution stays at 4K; only update CSS display height
       const wrap = document.getElementById('canvas-wrap');
-      canvas.width  = wrap.clientWidth;
-      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
-      vp = { scale: 1, tx: 0, ty: 0 };
-      document.getElementById('zoom-label').textContent = '100%';
+      canvas.style.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth) + 'px';
       redraw();
     });
   </script>
