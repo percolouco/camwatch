@@ -179,7 +179,11 @@
   <!-- Lightbox -->
   <div id="lightbox" onclick="closeLightboxIfOutside(event)">
     <span id="lb-close" onclick="closeLightbox()">×</span>
-    <img id="lb-img" src="" alt="">
+    <div id="lb-zoom-hint" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);color:#64748b;font-size:0.75rem;pointer-events:none;">
+      Molette pour zoomer · Glisser pour déplacer · <span id="lb-zoom-pct">100%</span>
+      &nbsp;·&nbsp;<a id="lb-fullres" href="#" target="_blank" style="color:#60a5fa;text-decoration:underline;">Ouvrir en plein écran</a>
+    </div>
+    <img id="lb-img" src="" alt="" style="transform-origin:center center;">
     <div id="lb-nav">
       <button onclick="lbPrev()" class="btn-ghost px-4">←</button>
       <span id="lb-label" class="text-slate-400 text-sm"></span>
@@ -191,10 +195,53 @@
     let lbFrames = {{ frames | tojson }};
     let lbIdx = 0;
 
+    // Lightbox zoom/pan state
+    let lbZ = 1, lbOx = 0, lbOy = 0, lbDrag = null;
+
+    function lbResetZoom() {
+      lbZ = 1; lbOx = 0; lbOy = 0;
+      const im = document.getElementById('lb-img');
+      im.style.transform = '';
+      im.style.cursor = '';
+      document.getElementById('lb-zoom-pct').textContent = '100%';
+    }
+
+    function lbApplyTransform() {
+      document.getElementById('lb-img').style.transform =
+        `translate(${lbOx}px,${lbOy}px) scale(${lbZ})`;
+      document.getElementById('lb-zoom-pct').textContent = Math.round(lbZ*100)+'%';
+      document.getElementById('lb-img').style.cursor = lbZ > 1 ? 'grab' : '';
+    }
+
+    document.getElementById('lightbox').addEventListener('wheel', e => {
+      if (!document.getElementById('lightbox').classList.contains('open')) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.3 : 1/1.3;
+      lbZ = Math.max(0.5, Math.min(20, lbZ * factor));
+      lbApplyTransform();
+    }, { passive: false });
+
+    document.getElementById('lb-img').addEventListener('mousedown', e => {
+      if (lbZ <= 1) return;
+      e.stopPropagation();
+      lbDrag = [e.clientX - lbOx, e.clientY - lbOy];
+      document.getElementById('lb-img').style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!lbDrag) return;
+      lbOx = e.clientX - lbDrag[0];
+      lbOy = e.clientY - lbDrag[1];
+      lbApplyTransform();
+    });
+    document.addEventListener('mouseup', () => {
+      if (lbDrag) { lbDrag = null; if (lbZ > 1) document.getElementById('lb-img').style.cursor = 'grab'; }
+    });
+
     function openLightbox(src, label) {
+      lbResetZoom();
       document.getElementById('lb-img').src = src;
       document.getElementById('lb-label').textContent = label;
-      // Find index in frames array
+      document.getElementById('lb-fullres').href = src;
       const rel = src.startsWith('/') ? src.slice(1) : src;
       lbIdx = lbFrames.indexOf(rel);
       document.getElementById('lightbox').classList.add('open');
@@ -202,6 +249,7 @@
 
     function closeLightbox() {
       document.getElementById('lightbox').classList.remove('open');
+      lbResetZoom();
     }
 
     function closeLightboxIfOutside(e) {
@@ -211,7 +259,9 @@
     function lbGo(idx) {
       if (lbFrames.length === 0) return;
       lbIdx = ((idx % lbFrames.length) + lbFrames.length) % lbFrames.length;
+      lbResetZoom();
       document.getElementById('lb-img').src = '/' + lbFrames[lbIdx];
+      document.getElementById('lb-fullres').href = '/' + lbFrames[lbIdx];
       document.getElementById('lb-label').textContent = 'Frame #' + (lbIdx + 1) + (lbIdx === 0 ? ' ★' : '');
     }
 

@@ -67,12 +67,17 @@
 
         <!-- Canvas -->
         <div class="card overflow-hidden">
-          <div id="canvas-wrap">
+          <div id="canvas-wrap" style="position:relative;">
             <canvas id="ann-canvas"></canvas>
           </div>
           <div class="px-3 py-2 flex items-center justify-between flex-wrap gap-2" style="background:#111827;">
-            <span id="bbox-status" class="text-sm text-slate-500">Clique et glisse sur l'image pour dessiner le rectangle autour de la plaque</span>
-            <button onclick="clearRect()" class="btn-ghost text-xs py-1 px-3">✕ Effacer le rectangle</button>
+            <span id="bbox-status" class="text-sm text-slate-500">Clique et glisse pour dessiner le rectangle · Molette pour zoomer · Clic droit ou Espace+glisser pour déplacer</span>
+            <div class="flex items-center gap-2">
+              <span id="zoom-label" class="text-xs text-slate-500 font-mono">100%</span>
+              <button onclick="resetZoom()" class="btn-ghost text-xs py-1 px-2">⊡ 1:1</button>
+              <button id="btn-fullres" onclick="openFullRes()" class="btn-ghost text-xs py-1 px-2">🔍 Plein écran</button>
+              <button onclick="clearRect()" class="btn-ghost text-xs py-1 px-3">✕ Effacer</button>
+            </div>
           </div>
         </div>
 
@@ -173,73 +178,151 @@
     const ctx = canvas.getContext('2d');
     const img = new Image();
     let currentFrameSrc = '';
-    let startX = 0, startY = 0, endX = 0, endY = 0;
-    let isDrawing = false;
-    let rect = null;  // finalized {x, y, w, h} in canvas pixels
 
-    // ── Image loading ──────────────────────────────────────────────────────
-    function loadImage(src) {
-      img.src = src;
+    // ── Viewport (zoom + pan) ──────────────────────────────────────────────
+    // All coordinates are in "canvas logical space" (0..canvas.width, 0..canvas.height).
+    // The viewport transform maps logical coords → screen pixels on the canvas element.
+    let vp = { scale: 1, tx: 0, ty: 0 };
+
+    function clampVP() {
+      const minTx = canvas.width  * (1 - vp.scale);
+      const minTy = canvas.height * (1 - vp.scale);
+      vp.tx = Math.min(0, Math.max(minTx, vp.tx));
+      vp.ty = Math.min(0, Math.max(minTy, vp.ty));
     }
 
-    img.onload = function() {
-      const wrap = document.getElementById('canvas-wrap');
-      canvas.width = wrap.clientWidth;
-      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
-      redraw();
-    };
+    // Convert a client-space (screen) position to logical canvas coords
+    function clientToLogical(cx, cy) {
+      const r = canvas.getBoundingClientRect();
+      const px = (cx - r.left) * (canvas.width  / r.width);
+      const py = (cy - r.top)  * (canvas.height / r.height);
+      return [(px - vp.tx) / vp.scale, (py - vp.ty) / vp.scale];
+    }
 
+    function resetZoom() {
+      vp = { scale: 1, tx: 0, ty: 0 };
+      document.getElementById('zoom-label').textContent = '100%';
+      redraw();
+    }
+
+    // ── Rect state (in logical canvas coords) ─────────────────────────────
+    let rect = null;       // finalized: {x1,y1,x2,y2}
+    let drawStart = null;
+    let drawEnd   = null;
+    let isDrawing = false;
+
+    // ── Pan state ─────────────────────────────────────────────────────────
+    let isPanning = false;
+    let panLast   = null;
+    let spaceDown = false;
+
+    // ── Render ────────────────────────────────────────────────────────────
     function redraw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const r = isDrawing
-        ? { x: Math.min(startX, endX), y: Math.min(startY, endY),
-            w: Math.abs(endX - startX), h: Math.abs(endY - startY) }
-        : rect;
+      ctx.save();
+      ctx.translate(vp.tx, vp.ty);
+      ctx.scale(vp.scale, vp.scale);
+      if (img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      // Current bbox in logical coords
+      let r = null;
+      if (isDrawing && drawStart && drawEnd) {
+        r = { x: Math.min(drawStart[0], drawEnd[0]), y: Math.min(drawStart[1], drawEnd[1]),
+              w: Math.abs(drawEnd[0]-drawStart[0]), h: Math.abs(drawEnd[1]-drawStart[1]) };
+      } else if (rect) {
+        r = { x: rect.x1, y: rect.y1, w: rect.x2-rect.x1, h: rect.y2-rect.y1 };
+      }
+
       if (r && r.w > 4 && r.h > 4) {
+        const lw = 3 / vp.scale;
         ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = lw;
         ctx.strokeRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = 'rgba(59,130,246,0.12)';
         ctx.fillRect(r.x, r.y, r.w, r.h);
-        // Corner handles
-        const hs = 8;
+        const hs = 7 / vp.scale;
         ctx.fillStyle = '#3b82f6';
         [[r.x,r.y],[r.x+r.w,r.y],[r.x,r.y+r.h],[r.x+r.w,r.y+r.h]].forEach(([hx,hy]) => {
           ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
         });
       }
+      ctx.restore();
     }
 
-    // ── Mouse events ───────────────────────────────────────────────────────
-    function evPos(e) {
+    // ── Mouse wheel → zoom ─────────────────────────────────────────────────
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.25 : 1/1.25;
       const r = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / r.width;
-      const scaleY = canvas.height / r.height;
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      return [(clientX - r.left) * scaleX, (clientY - r.top) * scaleY];
-    }
+      const mx = (e.clientX - r.left) * (canvas.width  / r.width);
+      const my = (e.clientY - r.top)  * (canvas.height / r.height);
+      const newScale = Math.max(1, Math.min(20, vp.scale * factor));
+      const f = newScale / vp.scale;
+      vp.tx = mx - (mx - vp.tx) * f;
+      vp.ty = my - (my - vp.ty) * f;
+      vp.scale = newScale;
+      clampVP();
+      document.getElementById('zoom-label').textContent = Math.round(vp.scale * 100) + '%';
+      redraw();
+    }, { passive: false });
 
+    // ── Space key → pan mode ───────────────────────────────────────────────
+    document.addEventListener('keydown', e => {
+      if (e.code === 'Space' && !e.target.matches('input,textarea')) {
+        spaceDown = true;
+        canvas.style.cursor = 'grab';
+        e.preventDefault();
+      }
+    });
+    document.addEventListener('keyup', e => {
+      if (e.code === 'Space') { spaceDown = false; canvas.style.cursor = 'crosshair'; }
+    });
+
+    // ── Mouse down ────────────────────────────────────────────────────────
     canvas.addEventListener('mousedown', e => {
-      [startX, startY] = evPos(e);
+      if (e.button === 1 || e.button === 2 || spaceDown) {
+        isPanning = true;
+        panLast = [e.clientX, e.clientY];
+        canvas.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
+      if (e.button !== 0) return;
+      drawStart = clientToLogical(e.clientX, e.clientY);
+      drawEnd   = [...drawStart];
       isDrawing = true;
       rect = null;
       updateStatus(false);
     });
+
     canvas.addEventListener('mousemove', e => {
+      if (isPanning) {
+        const r = canvas.getBoundingClientRect();
+        vp.tx += (e.clientX - panLast[0]) * (canvas.width  / r.width);
+        vp.ty += (e.clientY - panLast[1]) * (canvas.height / r.height);
+        panLast = [e.clientX, e.clientY];
+        clampVP();
+        redraw();
+        return;
+      }
       if (!isDrawing) return;
-      [endX, endY] = evPos(e);
+      drawEnd = clientToLogical(e.clientX, e.clientY);
       redraw();
     });
+
     canvas.addEventListener('mouseup', e => {
+      if (isPanning) {
+        isPanning = false;
+        canvas.style.cursor = spaceDown ? 'grab' : 'crosshair';
+        return;
+      }
       if (!isDrawing) return;
-      [endX, endY] = evPos(e);
       isDrawing = false;
-      const x = Math.min(startX, endX), y = Math.min(startY, endY);
-      const w = Math.abs(endX - startX), h = Math.abs(endY - startY);
+      drawEnd = clientToLogical(e.clientX, e.clientY);
+      const w = Math.abs(drawEnd[0]-drawStart[0]), h = Math.abs(drawEnd[1]-drawStart[1]);
       if (w > 8 && h > 4) {
-        rect = { x, y, w, h };
+        rect = { x1: Math.min(drawStart[0],drawEnd[0]), y1: Math.min(drawStart[1],drawEnd[1]),
+                 x2: Math.max(drawStart[0],drawEnd[0]), y2: Math.max(drawStart[1],drawEnd[1]) };
         updateBbox();
         updateStatus(true);
       } else {
@@ -249,37 +332,93 @@
       redraw();
     });
 
-    // Touch support
-    canvas.addEventListener('touchstart', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousedown', {clientX: e.touches[0].clientX, clientY: e.touches[0].clientY})); });
-    canvas.addEventListener('touchmove', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mousemove', {clientX: e.touches[0].clientX, clientY: e.touches[0].clientY})); });
-    canvas.addEventListener('touchend', e => { e.preventDefault(); canvas.dispatchEvent(new MouseEvent('mouseup', {clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY})); });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    // ── Touch (two-finger pinch + single-finger draw) ─────────────────────
+    let touchLast = null, lastDist = null;
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        lastDist = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+        touchLast = [(e.touches[0].clientX+e.touches[1].clientX)/2, (e.touches[0].clientY+e.touches[1].clientY)/2];
+      } else {
+        drawStart = clientToLogical(e.touches[0].clientX, e.touches[0].clientY);
+        drawEnd   = [...drawStart];
+        isDrawing = true; rect = null; updateStatus(false);
+      }
+    }, {passive:false});
+
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+        const mx = (e.touches[0].clientX+e.touches[1].clientX)/2;
+        const my = (e.touches[0].clientY+e.touches[1].clientY)/2;
+        if (lastDist) {
+          const factor = d / lastDist;
+          const r = canvas.getBoundingClientRect();
+          const px = (mx - r.left) * (canvas.width/r.width), py = (my - r.top) * (canvas.height/r.height);
+          const newScale = Math.max(1, Math.min(20, vp.scale * factor));
+          const f = newScale / vp.scale;
+          vp.tx = px - (px - vp.tx)*f; vp.ty = py - (py - vp.ty)*f; vp.scale = newScale;
+          clampVP();
+          document.getElementById('zoom-label').textContent = Math.round(vp.scale*100)+'%';
+        }
+        if (touchLast) { const r=canvas.getBoundingClientRect(); vp.tx+=(mx-touchLast[0])*(canvas.width/r.width); vp.ty+=(my-touchLast[1])*(canvas.height/r.height); clampVP(); }
+        lastDist = d; touchLast = [mx, my];
+        redraw();
+      } else if (isDrawing) {
+        drawEnd = clientToLogical(e.touches[0].clientX, e.touches[0].clientY);
+        redraw();
+      }
+    }, {passive:false});
+
+    canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      lastDist = null; touchLast = null;
+      if (isDrawing) {
+        isDrawing = false;
+        const w = Math.abs(drawEnd[0]-drawStart[0]), h = Math.abs(drawEnd[1]-drawStart[1]);
+        if (w > 8 && h > 4) {
+          rect = { x1:Math.min(drawStart[0],drawEnd[0]), y1:Math.min(drawStart[1],drawEnd[1]),
+                   x2:Math.max(drawStart[0],drawEnd[0]), y2:Math.max(drawStart[1],drawEnd[1]) };
+          updateBbox(); updateStatus(true);
+        } else { rect = null; updateStatus(false); }
+        redraw();
+      }
+    }, {passive:false});
 
     // ── Helpers ────────────────────────────────────────────────────────────
     function updateBbox() {
       if (!rect) { document.getElementById('input-bbox').value = ''; return; }
-      const cx = (rect.x + rect.w / 2) / canvas.width;
-      const cy = (rect.y + rect.h / 2) / canvas.height;
-      const bw = rect.w / canvas.width;
-      const bh = rect.h / canvas.height;
+      const cx = (rect.x1+rect.x2)/2 / canvas.width;
+      const cy = (rect.y1+rect.y2)/2 / canvas.height;
+      const bw = (rect.x2-rect.x1) / canvas.width;
+      const bh = (rect.y2-rect.y1) / canvas.height;
       document.getElementById('input-bbox').value = JSON.stringify(
-        { cx: +cx.toFixed(6), cy: +cy.toFixed(6), w: +bw.toFixed(6), h: +bh.toFixed(6) }
+        { cx:+cx.toFixed(6), cy:+cy.toFixed(6), w:+bw.toFixed(6), h:+bh.toFixed(6) }
       );
     }
 
     function updateStatus(ok) {
+      const px = ok ? Math.round(rect.x2-rect.x1) : 0;
+      const py = ok ? Math.round(rect.y2-rect.y1) : 0;
       document.getElementById('bbox-status').textContent = ok
-        ? `Rectangle défini — ${Math.round(rect.w)}×${Math.round(rect.h)}px`
-        : 'Clique et glisse sur l\'image pour dessiner le rectangle autour de la plaque';
+        ? `✓ Rectangle défini — ${px}×${py}px logiques`
+        : 'Clique et glisse pour dessiner le rectangle · Molette pour zoomer · Clic droit ou Espace+glisser pour déplacer';
       document.getElementById('save-warning').classList.toggle('hidden', ok);
       document.getElementById('save-ok').classList.toggle('hidden', !ok);
     }
 
     function clearRect() {
-      rect = null;
-      isDrawing = false;
+      rect = null; isDrawing = false; drawStart = null; drawEnd = null;
       document.getElementById('input-bbox').value = '';
       updateStatus(false);
       redraw();
+    }
+
+    function openFullRes() {
+      if (currentFrameSrc) window.open(currentFrameSrc, '_blank');
     }
 
     function selectFrame(el, src) {
@@ -288,8 +427,19 @@
       currentFrameSrc = src;
       document.getElementById('input-frame').value = src.startsWith('/') ? src.slice(1) : src;
       clearRect();
-      loadImage(src);
+      resetZoom();
+      img.src = src;
     }
+
+    // ── Image loading ──────────────────────────────────────────────────────
+    img.onload = function() {
+      const wrap = document.getElementById('canvas-wrap');
+      canvas.width  = wrap.clientWidth;
+      canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
+      vp = { scale: 1, tx: 0, ty: 0 };
+      document.getElementById('zoom-label').textContent = '100%';
+      redraw();
+    };
 
     // ── Form validation ────────────────────────────────────────────────────
     document.getElementById('ann-form').addEventListener('submit', function(e) {
@@ -303,16 +453,17 @@
 
     // ── Init ───────────────────────────────────────────────────────────────
     {% if frames %}
-    loadImage('/{{ frames[0] }}');
     currentFrameSrc = '/{{ frames[0] }}';
+    img.src = currentFrameSrc;
     {% endif %}
 
-    // Handle window resize
     window.addEventListener('resize', () => {
-      if (!img.src) return;
+      if (!img.complete || !img.naturalWidth) return;
       const wrap = document.getElementById('canvas-wrap');
-      canvas.width = wrap.clientWidth;
+      canvas.width  = wrap.clientWidth;
       canvas.height = Math.round(wrap.clientWidth * img.naturalHeight / img.naturalWidth);
+      vp = { scale: 1, tx: 0, ty: 0 };
+      document.getElementById('zoom-label').textContent = '100%';
       redraw();
     });
   </script>
