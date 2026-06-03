@@ -94,6 +94,29 @@ def _get_ai_state() -> dict | None:
     return None
 
 
+def _vehicle_crop(frame: np.ndarray, plate_bbox: tuple | None) -> np.ndarray:
+    """Crop around the vehicle using the plate bbox as anchor.
+    Expands generously above/around the plate where the vehicle body is."""
+    h, w = frame.shape[:2]
+    if plate_bbox:
+        px1, py1, px2, py2 = plate_bbox
+        pw, ph = px2 - px1, py2 - py1
+        pad_x  = max(int(pw * 3.5), 300)
+        pad_up = max(int(ph * 9),   400)  # vehicle extends above the plate
+        pad_dn = max(int(ph * 2.5), 100)
+        cx1 = max(0, px1 - pad_x)
+        cx2 = min(w, px2 + pad_x)
+        cy1 = max(0, py1 - pad_up)
+        cy2 = min(h, py2 + pad_dn)
+        crop = frame[cy1:cy2, cx1:cx2]
+        if crop.shape[0] >= 80 and crop.shape[1] >= 80:
+            return crop
+    # Fallback: center 60% of frame
+    cy1, cy2 = int(h * 0.1), int(h * 0.9)
+    cx1, cx2 = int(w * 0.1), int(w * 0.9)
+    return frame[cy1:cy2, cx1:cx2]
+
+
 def _vehicle_color(frame: np.ndarray, plate_bbox: tuple | None) -> tuple[str, str]:
     """Extract dominant color from the vehicle body (above the plate, or center frame)."""
     h, w = frame.shape[:2]
@@ -269,10 +292,17 @@ def _process_clip(event_id: str, event_dir: str, clip_path: str, camera_name: st
             enhanced = cv2.resize(enhanced, (300, int(300 * ch / cw)), interpolation=cv2.INTER_CUBIC)
         cv2.imwrite(os.path.join(event_dir, "plate_ocr.jpg"), enhanced, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
-    # Save thumbnail
+    # Save thumbnail — vehicle crop if plate found, full frame otherwise
     snapshot_file = f"{event_id}.jpg"
     snapshot_path = os.path.join(SNAPSHOTS_DIR, snapshot_file)
-    cv2.imwrite(snapshot_path, best_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    thumb = _vehicle_crop(best_frame, plate_bbox)
+    # Cap thumbnail width to 1280px to keep file size reasonable
+    th, tw = thumb.shape[:2]
+    if tw > 1280:
+        thumb = cv2.resize(thumb, (1280, int(th * 1280 / tw)), interpolation=cv2.INTER_AREA)
+    cv2.imwrite(snapshot_path, thumb, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    # Also save the full best frame so event detail can display it
+    cv2.imwrite(os.path.join(event_dir, "best_frame.jpg"), best_frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
 
     from database import is_whitelisted
     if plate and is_whitelisted(plate):

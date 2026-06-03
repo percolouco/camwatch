@@ -113,6 +113,10 @@ async def event_detail(request: Request, event_id: str):
     plate_ocr_abs = os.path.join(event_dir, "plate_ocr.jpg")
     plate_ocr = f"events/{event_id}/plate_ocr.jpg" if os.path.exists(plate_ocr_abs) else None
 
+    # Full best frame (vehicle crop is only the thumbnail; full frame for detail view)
+    best_frame_abs = os.path.join(event_dir, "best_frame.jpg")
+    best_frame_path = f"events/{event_id}/best_frame.jpg" if os.path.exists(best_frame_abs) else ev.get("snapshot_path")
+
     is_wl = database.is_whitelisted(ev.get("plate") or "")
     return templates.TemplateResponse("event_detail.html", {
         "request": request,
@@ -122,6 +126,7 @@ async def event_detail(request: Request, event_id: str):
         "clip_size": clip_size,
         "plate_crop": plate_crop,
         "plate_ocr": plate_ocr,
+        "best_frame_path": best_frame_path,
         "capture_duration": CAPTURE_DURATION,
         "capture_fps": CAPTURE_FPS,
         "capture_total": CAPTURE_DURATION * CAPTURE_FPS,

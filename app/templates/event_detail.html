@@ -117,9 +117,9 @@
 
       <div class="md:col-span-2 card overflow-hidden">
         <div class="bg-black relative cursor-zoom-in" style="aspect-ratio:16/9;"
-             onclick="openLightbox('/{{ ev.snapshot_path }}', 'Meilleure frame ★')">
+             onclick="openLightbox('/{{ best_frame_path }}', 'Meilleure frame ★')">
           <img id="main-img"
-               src="{% if ev.snapshot_path %}/{{ ev.snapshot_path }}{% endif %}"
+               src="{% if best_frame_path %}/{{ best_frame_path }}{% endif %}"
                class="w-full h-full object-contain">
           <span class="absolute bottom-2 right-2 text-xs text-slate-500">🔍 cliquer pour agrandir</span>
         </div>
