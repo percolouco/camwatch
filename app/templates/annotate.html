@@ -102,11 +102,19 @@
                       style="background:#166534;color:#4ade80;border:1px solid #16a34a;">
                 ✓ Sauvegarder l'annotation
               </button>
+              <button type="button" id="btn-test-lpr" onclick="testLPR()"
+                      class="px-4 py-2 rounded font-medium"
+                      style="background:#1e293b;color:#60a5fa;border:1px solid #2563eb;">
+                🔍 Tester LPR
+              </button>
               <span id="save-warning" class="text-yellow-400 text-sm hidden">⚠ Dessine d'abord le rectangle autour de la plaque</span>
               <span id="save-ok" class="text-green-400 text-sm hidden">✓ Rectangle défini — prêt à sauvegarder</span>
             </div>
           </div>
         </form>
+
+        <!-- LPR test results -->
+        <div id="lpr-result" class="card p-4 hidden"></div>
 
       </div>
     </div>
@@ -441,6 +449,109 @@
       document.getElementById('zoom-label').textContent = '100%';
       redraw();
     };
+
+    // ── LPR test ───────────────────────────────────────────────────────────
+    async function testLPR() {
+      const framePathEl = document.getElementById('input-frame');
+      const bboxEl      = document.getElementById('input-bbox');
+      const resultEl    = document.getElementById('lpr-result');
+      const btn         = document.getElementById('btn-test-lpr');
+
+      if (!framePathEl.value) {
+        resultEl.innerHTML = '<p class="text-yellow-400 text-sm">Aucune frame sélectionnée.</p>';
+        resultEl.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ En cours…';
+      resultEl.innerHTML = '<p class="text-slate-500 text-sm">Requête en cours…</p>';
+      resultEl.classList.remove('hidden');
+
+      const fd = new FormData();
+      fd.append('frame_path', framePathEl.value);
+      fd.append('bbox', bboxEl.value);
+
+      try {
+        const resp = await fetch('/event/{{ ev.id }}/test-lpr', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderLPRResult(data);
+      } catch(e) {
+        resultEl.innerHTML = `<p class="text-red-400 text-sm">Erreur: ${e.message}</p>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Tester LPR';
+      }
+    }
+
+    function usePlate(plate) {
+      document.getElementById('input-plate').value = plate;
+    }
+
+    function renderLPRResult(data) {
+      const resultEl = document.getElementById('lpr-result');
+      if (data.error) {
+        resultEl.innerHTML = `<p class="text-red-400 text-sm">${data.error}</p>`;
+        return;
+      }
+
+      let html = '<div class="space-y-4">';
+      html += '<label class="block">Résultats LPR</label>';
+
+      // PlateRecognizer
+      if (data.platerecognizer) {
+        const pr = data.platerecognizer;
+        const pct = Math.round(pr.conf * 100);
+        const col = pr.conf >= 0.7 ? '#4ade80' : pr.conf >= 0.4 ? '#fbbf24' : '#f87171';
+        html += `<div>
+          <div class="text-xs text-slate-500 mb-1 uppercase tracking-wide font-semibold">PlateRecognizer API</div>
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="font-mono text-lg font-bold px-4 py-1 rounded" style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">${pr.plate || '—'}</span>
+            <span class="text-sm font-mono" style="color:${col};">${pct}%</span>
+            ${pr.plate ? `<button type="button" onclick="usePlate('${pr.plate}')" class="btn-ghost text-xs py-1 px-2 text-blue-400">↑ Utiliser</button>` : ''}
+          </div>
+          ${pr.raw && pr.raw.replace(/-/g,'') !== pr.plate.replace(/-/g,'') ? `<p class="text-slate-500 text-xs mt-1">Brut API: ${pr.raw}</p>` : ''}
+        </div>`;
+      } else if (data.has_pr) {
+        html += `<div>
+          <div class="text-xs text-slate-500 mb-1 uppercase tracking-wide font-semibold">PlateRecognizer API</div>
+          <p class="text-slate-500 text-sm">Aucune plaque détectée</p>
+        </div>`;
+      }
+
+      // Local OCR
+      if (data.local) {
+        const loc = data.local;
+        const pct = Math.round(loc.conf * 100);
+        const col = loc.conf >= 0.7 ? '#4ade80' : loc.conf >= 0.4 ? '#fbbf24' : '#f87171';
+        const src = loc.source === 'perspective_corrected' ? 'correction perspective ✓' : 'recadrage direct';
+        html += `<div>
+          <div class="text-xs text-slate-500 mb-1 uppercase tracking-wide font-semibold">OCR local — ${src}</div>
+          <div class="flex items-center gap-3 flex-wrap mb-2">
+            <span class="font-mono text-lg font-bold px-4 py-1 rounded" style="background:#1e3a5f;color:#60a5fa;border:1px solid #2563eb;">${loc.plate || '—'}</span>
+            <span class="text-sm font-mono" style="color:${col};">${pct}%</span>
+            ${loc.plate ? `<button type="button" onclick="usePlate('${loc.plate}')" class="btn-ghost text-xs py-1 px-2 text-blue-400">↑ Utiliser</button>` : ''}
+          </div>
+          ${loc.raw && loc.raw !== loc.plate ? `<p class="text-slate-500 text-xs mb-2">Brut OCR: "${loc.raw}"</p>` : ''}
+          ${loc.img_b64 ? `<img src="data:image/jpeg;base64,${loc.img_b64}" class="rounded border border-slate-600" style="image-rendering:pixelated;max-height:56px;" title="Image envoyée à l'OCR">` : ''}
+        </div>`;
+      } else if (data.local_error) {
+        html += `<div>
+          <div class="text-xs text-slate-500 mb-1 uppercase tracking-wide font-semibold">OCR local</div>
+          <p class="text-red-400 text-sm">${data.local_error}</p>
+        </div>`;
+      } else if (document.getElementById('input-bbox').value) {
+        html += `<div>
+          <div class="text-xs text-slate-500 mb-1 uppercase tracking-wide font-semibold">OCR local</div>
+          <p class="text-slate-500 text-sm">Aucun résultat</p>
+        </div>`;
+      } else {
+        html += `<p class="text-slate-500 text-sm italic">Dessine un rectangle autour de la plaque pour tester l'OCR local.</p>`;
+      }
+
+      html += '</div>';
+      resultEl.innerHTML = html;
+    }
 
     // ── Form validation ────────────────────────────────────────────────────
     document.getElementById('ann-form').addEventListener('submit', function(e) {

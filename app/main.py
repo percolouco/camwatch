@@ -316,6 +316,87 @@ async def whitelist_remove(plate: str, back: str = Form("")):
     return RedirectResponse(back or "/whitelist", status_code=303)
 
 
+@app.post("/event/{event_id}/test-lpr")
+async def test_lpr(event_id: str, frame_path: str = Form(""), bbox: str = Form("")):
+    import json, base64, cv2, numpy as np
+
+    frame_abs = os.path.join("/data", frame_path) if frame_path else None
+    if not frame_abs or not os.path.exists(frame_abs):
+        raise HTTPException(404, "Frame introuvable")
+
+    def _run():
+        frame = cv2.imread(frame_abs)
+        if frame is None:
+            return {"error": "Impossible de lire l'image"}
+
+        result: dict = {"has_pr": bool(PLATERECOGNIZER_KEY)}
+
+        if PLATERECOGNIZER_KEY:
+            from lpr import call_platerecognizer
+            from watcher import _normalize_plate
+            p, c = call_platerecognizer(frame, PLATERECOGNIZER_KEY)
+            if p:
+                result["platerecognizer"] = {
+                    "plate": _normalize_plate(p) or p,
+                    "raw": p,
+                    "conf": round(c, 3),
+                }
+
+        analyzer = watcher._analyzer
+        if bbox and analyzer:
+            try:
+                box = json.loads(bbox)
+                h, w = frame.shape[:2]
+                cx2, cy2 = box["cx"] * w, box["cy"] * h
+                bw2, bh2 = box["w"] * w, box["h"] * h
+                x1 = max(0, int(cx2 - bw2 / 2))
+                y1 = max(0, int(cy2 - bh2 / 2))
+                x2 = min(w, int(cx2 + bw2 / 2))
+                y2 = min(h, int(cy2 + bh2 / 2))
+
+                source = "raw_crop"
+                ocr_img = None
+                quad = analyzer._find_plate_quad(frame, x1, y1, x2, y2)
+                if quad is not None:
+                    corrected = analyzer._perspective_correct(frame, quad)
+                    if corrected is not None and corrected.size > 0:
+                        ocr_img = analyzer._enhance_crop(corrected)
+                        source = "perspective_corrected"
+
+                if ocr_img is None:
+                    crop = frame[y1:y2, x1:x2]
+                    ocr_img = analyzer._enhance_crop(crop) if crop.size > 0 else None
+
+                if ocr_img is not None:
+                    text, conf = analyzer._ocr_paddle(ocr_img)
+                    if not text:
+                        text, conf = analyzer._ocr_tesseract(ocr_img)
+
+                    oh, ow = ocr_img.shape[:2]
+                    if ow > 0 and ow < 300:
+                        scale = 300 / ow
+                        ocr_display = cv2.resize(ocr_img, (300, int(oh * scale)), interpolation=cv2.INTER_CUBIC)
+                    else:
+                        ocr_display = ocr_img
+                    _, buf = cv2.imencode(".jpg", ocr_display, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+                    from watcher import _normalize_plate
+                    result["local"] = {
+                        "plate": _normalize_plate(text) or text,
+                        "raw": text,
+                        "conf": round(conf, 3),
+                        "img_b64": base64.b64encode(buf).decode(),
+                        "source": source,
+                    }
+            except Exception as e:
+                result["local_error"] = str(e)
+
+        return result
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
