@@ -10,8 +10,10 @@
     body { background: #0f172a; color: #e2e8f0; }
     .card { background: #1e293b; border: 1px solid #334155; }
     .plate { font-family: monospace; letter-spacing: 0.12em; }
-    input { background: #0f172a; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; padding: 6px 10px; }
-    input:focus { outline: none; border-color: #60a5fa; }
+    input, select { background: #0f172a; border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; padding: 6px 10px; }
+    input:focus, select:focus { outline: none; border-color: #60a5fa; }
+    select option { background: #0f172a; }
+    .filter-label { color: #64748b; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; display: block; margin-bottom: 3px; }
     .btn { background: #2563eb; color: #fff; border-radius: 6px; padding: 7px 16px; font-size: 0.85rem; cursor: pointer; }
     .btn:hover { background: #1d4ed8; }
     .btn-ghost { background: #1e293b; border: 1px solid #475569; color: #94a3b8; }
@@ -59,11 +61,36 @@
     </div>
 
     <!-- Filters -->
-    <form method="get" class="flex flex-wrap gap-2 mb-5">
-      <input type="text" name="plate" placeholder="Plaque…" value="{{ filter_plate }}" class="w-32">
-      <input type="date" name="date" value="{{ filter_date }}">
+    <form method="get" class="mb-5 p-3 rounded-xl flex flex-wrap gap-x-3 gap-y-2 items-end" style="background:#1e293b;border:1px solid #334155;">
+      <div>
+        <span class="filter-label">Plaque</span>
+        <input type="text" name="plate" placeholder="AB-123-CD…" value="{{ filter_plate }}" class="w-28">
+      </div>
+      <div>
+        <span class="filter-label">Détection</span>
+        <select name="has_plate" class="w-32">
+          <option value="" {% if not filter_has_plate %}selected{% endif %}>Toutes</option>
+          <option value="yes" {% if filter_has_plate == 'yes' %}selected{% endif %}>Plaque lue ✓</option>
+          <option value="no"  {% if filter_has_plate == 'no'  %}selected{% endif %}>Non lue</option>
+        </select>
+      </div>
+      {% if colors %}
+      <div>
+        <span class="filter-label">Couleur</span>
+        <select name="color" class="w-28">
+          <option value="" {% if not filter_color %}selected{% endif %}>Toutes</option>
+          {% for c in colors %}
+          <option value="{{ c }}" {% if filter_color == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div>
+        <span class="filter-label">Période <span class="normal-case font-normal text-slate-600">(2026 / 2026-06 / 2026-06-04)</span></span>
+        <input type="text" name="date" placeholder="Année, mois ou jour…" value="{{ filter_date }}" class="w-40">
+      </div>
       <button type="submit" class="btn">Filtrer</button>
-      {% if filter_plate or filter_date %}
+      {% if filter_plate or filter_date or filter_has_plate or filter_color %}
       <a href="/" class="btn btn-ghost">✕ Reset</a>
       {% endif %}
     </form>
@@ -112,13 +139,14 @@
     </div>
 
     {% if total_pages > 1 %}
+    {% set fq = "&plate=" ~ filter_plate ~ "&date=" ~ filter_date ~ "&has_plate=" ~ filter_has_plate ~ "&color=" ~ filter_color %}
     <div class="flex items-center justify-center gap-2 mt-6">
       {% if page > 1 %}
-      <a href="?page={{ page - 1 }}&plate={{ filter_plate }}&date={{ filter_date }}" class="btn btn-ghost text-sm">← Préc.</a>
+      <a href="?page={{ page - 1 }}{{ fq }}" class="btn btn-ghost text-sm">← Préc.</a>
       {% endif %}
       <span class="text-slate-400 text-sm">Page {{ page }} / {{ total_pages }}</span>
       {% if page < total_pages %}
-      <a href="?page={{ page + 1 }}&plate={{ filter_plate }}&date={{ filter_date }}" class="btn btn-ghost text-sm">Suiv. →</a>
+      <a href="?page={{ page + 1 }}{{ fq }}" class="btn btn-ghost text-sm">Suiv. →</a>
       {% endif %}
     </div>
     {% endif %}

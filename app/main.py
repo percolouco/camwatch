@@ -66,17 +66,18 @@ async def index(
     plate: str = Query(""),
     camera: str = Query(""),
     date: str = Query(""),
+    has_plate: str = Query(""),
+    color: str = Query(""),
 ):
     limit = 20
     offset = (page - 1) * limit
-    events = database.get_events(limit=limit, offset=offset,
-                                  plate_filter=plate or None,
-                                  camera_filter=camera or None,
-                                  date_filter=date or None)
-    total = database.count_events(plate_filter=plate or None,
-                                   camera_filter=camera or None,
-                                   date_filter=date or None)
+    kw = dict(plate_filter=plate or None, camera_filter=camera or None,
+              date_filter=date or None, has_plate=has_plate or None,
+              color_filter=color or None)
+    events = database.get_events(limit=limit, offset=offset, **kw)
+    total  = database.count_events(**kw)
     cameras = database.get_cameras()
+    colors  = database.get_distinct_colors()
     total_pages = max(1, (total + limit - 1) // limit)
 
     for ev in events:
@@ -89,9 +90,12 @@ async def index(
         "page": page,
         "total_pages": total_pages,
         "cameras": cameras,
+        "colors": colors,
         "filter_plate": plate,
         "filter_camera": camera,
         "filter_date": date,
+        "filter_has_plate": has_plate,
+        "filter_color": color,
     })
 
 

@@ -68,7 +68,34 @@ def insert_event(event_id, camera, start_time, snapshot_path, clip_path, plate, 
     conn.commit()
     conn.close()
 
-def get_events(limit=100, offset=0, plate_filter=None, camera_filter=None, date_filter=None):
+def _apply_date_filter(query, params, date_filter):
+    """Append date range clause for YYYY, YYYY-MM, or YYYY-MM-DD."""
+    from datetime import datetime
+    s = date_filter.strip()
+    try:
+        if len(s) == 4:
+            dt = datetime.strptime(s, "%Y")
+            ts_start = int(dt.timestamp())
+            ts_end = int(datetime(dt.year + 1, 1, 1).timestamp())
+        elif len(s) == 7:
+            dt = datetime.strptime(s, "%Y-%m")
+            ts_start = int(dt.timestamp())
+            nm = dt.month % 12 + 1
+            ny = dt.year + (1 if dt.month == 12 else 0)
+            ts_end = int(datetime(ny, nm, 1).timestamp())
+        else:
+            dt = datetime.strptime(s, "%Y-%m-%d")
+            ts_start = int(dt.timestamp())
+            ts_end = ts_start + 86400
+        query += " AND start_time >= ? AND start_time < ?"
+        params.extend([ts_start, ts_end])
+    except Exception:
+        pass
+    return query, params
+
+
+def get_events(limit=100, offset=0, plate_filter=None, camera_filter=None,
+               date_filter=None, has_plate=None, color_filter=None):
     conn = get_db()
     query = "SELECT * FROM events WHERE 1=1"
     params = []
@@ -79,23 +106,23 @@ def get_events(limit=100, offset=0, plate_filter=None, camera_filter=None, date_
         query += " AND camera = ?"
         params.append(camera_filter)
     if date_filter:
-        import time
-        from datetime import datetime
-        try:
-            dt = datetime.strptime(date_filter, "%Y-%m-%d")
-            ts_start = int(dt.timestamp())
-            ts_end = ts_start + 86400
-            query += " AND start_time >= ? AND start_time < ?"
-            params.extend([ts_start, ts_end])
-        except Exception:
-            pass
+        query, params = _apply_date_filter(query, params, date_filter)
+    if has_plate == "yes":
+        query += " AND plate IS NOT NULL AND plate != ''"
+    elif has_plate == "no":
+        query += " AND (plate IS NULL OR plate = '')"
+    if color_filter:
+        query += " AND color_name = ?"
+        params.append(color_filter)
     query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
-def count_events(plate_filter=None, camera_filter=None, date_filter=None):
+
+def count_events(plate_filter=None, camera_filter=None, date_filter=None,
+                 has_plate=None, color_filter=None):
     conn = get_db()
     query = "SELECT COUNT(*) FROM events WHERE 1=1"
     params = []
@@ -106,16 +133,14 @@ def count_events(plate_filter=None, camera_filter=None, date_filter=None):
         query += " AND camera = ?"
         params.append(camera_filter)
     if date_filter:
-        import time
-        from datetime import datetime
-        try:
-            dt = datetime.strptime(date_filter, "%Y-%m-%d")
-            ts_start = int(dt.timestamp())
-            ts_end = ts_start + 86400
-            query += " AND start_time >= ? AND start_time < ?"
-            params.extend([ts_start, ts_end])
-        except Exception:
-            pass
+        query, params = _apply_date_filter(query, params, date_filter)
+    if has_plate == "yes":
+        query += " AND plate IS NOT NULL AND plate != ''"
+    elif has_plate == "no":
+        query += " AND (plate IS NULL OR plate = '')"
+    if color_filter:
+        query += " AND color_name = ?"
+        params.append(color_filter)
     count = conn.execute(query, params).fetchone()[0]
     conn.close()
     return count
@@ -144,6 +169,15 @@ def update_plate(event_id: str, plate: str):
 def get_cameras():
     conn = get_db()
     rows = conn.execute("SELECT DISTINCT camera FROM events ORDER BY camera").fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_distinct_colors() -> list[str]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT color_name FROM events WHERE color_name IS NOT NULL AND color_name != '' ORDER BY color_name"
+    ).fetchall()
     conn.close()
     return [r[0] for r in rows]
 
